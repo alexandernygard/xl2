@@ -1,0 +1,30 @@
+{
+  "name": "@xl2/viz",
+  "version": "0.1.0",
+  "description": "React views for xl2 workbooks: data grid, charts, metrics, params.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@xl2/sdk": "workspace:*",
+    "lucide-react": "^1.59.0",
+    "recharts": "3.8.0"
+  },
+  "peerDependencies": {
+    "@alexandernygard/components": "^0.1.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@alexandernygard/components": "^0.1.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typescript": "~5.9.3"
+  }
+}

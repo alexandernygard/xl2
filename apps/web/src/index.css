@@ -1,0 +1,32 @@
+@import "tailwindcss";
+@import "@alexandernygard/components/theme.css";
+
+@source "../../../packages/viz/src";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+  overflow: hidden;
+}
+
+.cm-editor {
+  height: 100%;
+  font-size: 13px;
+}
+.cm-editor.cm-focused {
+  outline: none;
+}
+.cm-scroller {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  line-height: 1.6;
+}
+.cm-flash {
+  background: color-mix(in oklab, var(--highlight) 35%, transparent);
+  border-radius: 3px;
+  transition: background 1.2s;
+}
