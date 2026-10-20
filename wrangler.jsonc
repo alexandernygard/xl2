@@ -1,0 +1,13 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "xl2",
+	"compatibility_date": "2026-10-18",
+	// Static-assets-only Worker: no server code runs, files are served from Cloudflare's edge.
+	"assets": {
+		"directory": "./apps/web/dist",
+		"not_found_handling": "single-page-application"
+	},
+	"routes": [{ "pattern": "xl2.nyggis.com", "custom_domain": true }],
+	"workers_dev": false,
+	"preview_urls": true
+}
