@@ -27,6 +27,7 @@ import {
   type Format,
   type ParamModel,
   type Rect,
+  type SheetDiff,
   type SheetModel,
   type TableModel,
 } from "@xl2/sdk"
@@ -72,6 +73,8 @@ export interface SheetGridProps {
   onIntent: IntentHandler
   onError?: (message: string) => void
   onAction?: (action: GridAction) => void
+  /** Changes under review, highlighted cell by cell. */
+  changes?: SheetDiff | null
   className?: string
   ref?: React.Ref<SheetGridHandle>
 }
@@ -114,7 +117,7 @@ const one = (row: number, col: number): GridSelection => ({ anchor: { row, col }
 let internalClip: { text: string; cells: ClipCell[][]; from: { row: number; col: number } } | null = null
 
 /** One sheet as an infinite, virtualized grid. Tables, params and free cells sit in cells; charts, metrics and text float over them. */
-export function SheetGrid({ sheet, ctx, selection, selectedBlock, onSelect, onSelectBlock, onIntent, onError, onAction, className, ref }: SheetGridProps) {
+export function SheetGrid({ sheet, ctx, selection, selectedBlock, onSelect, onSelectBlock, onIntent, onError, onAction, changes, className, ref }: SheetGridProps) {
   const scroller = React.useRef<HTMLDivElement>(null)
   const input = React.useRef<HTMLInputElement>(null)
   const [view, setView] = React.useState({ top: 0, left: 0, w: 1200, h: 800 })
@@ -125,6 +128,24 @@ export function SheetGrid({ sheet, ctx, selection, selectedBlock, onSelect, onSe
   // the editor's blur fires after Enter/Tab already committed; only the live edit may commit
   const live = React.useRef<Editing | null>(null)
   live.current = editing
+
+  const changed = React.useMemo(
+    () =>
+      Object.entries(changes?.cells ?? {}).flatMap(([a, c]) => {
+        const p = parseAddress(a)
+        return p ? [{ ...p, ...c }] : []
+      }),
+    [changes],
+  )
+  const blockChanges = React.useMemo(() => {
+    const m = new Map<number, string>()
+    for (const b of changes?.blocks ?? []) {
+      if (b.index === undefined) continue
+      const kind = b.kind === "moved" ? "edited" : b.kind
+      if (!m.has(b.index) || kind === "edited") m.set(b.index, kind)
+    }
+    return m
+  }, [changes])
 
   const widths = React.useMemo(() => autoWidths(sheet, ctx), [sheet, ctx])
   const columns = React.useMemo(
@@ -559,6 +580,7 @@ export function SheetGrid({ sheet, ctx, selection, selectedBlock, onSelect, onSe
       if (info.kind === "table" && info.region.kind === "title") continue
       if (editing && editing.row === row && editing.col === col) continue
       const look = cellLook(info, ctx)
+      const was = changes?.cells[info.address]?.was
       const inTable = info.kind === "table" || info.kind === "param"
       if (!look && !inTable) continue
       const b = cellBox(row, col)
@@ -571,7 +593,7 @@ export function SheetGrid({ sheet, ctx, selection, selectedBlock, onSelect, onSe
             look?.className,
           )}
           style={{ left: b.left, top: b.top, width: b.width, height: b.height, textAlign: look?.align }}
-          title={look?.title}
+          title={was !== undefined ? [look?.title, `Was: ${was}`].filter(Boolean).join("\n") : look?.title}
         >
           {look?.check !== undefined ? (
             look.check ? <CheckIcon className="inline size-3.5 text-positive" /> : <span className="inline-block size-3 rounded-sm border align-middle" />
@@ -759,6 +781,43 @@ export function SheetGrid({ sheet, ctx, selection, selectedBlock, onSelect, onSe
                   )
                 })}
 
+                {/* changes under review */}
+                {changed.map((c) => {
+                  if (c.row < r0 || c.row > r1 || c.col < c0 || c.col > c1) return null
+                  const b = cellBox(c.row, c.col)
+                  return (
+                    <div
+                      key={`chg:${c.row}:${c.col}`}
+                      className={cn(
+                        "pointer-events-none absolute z-[4] truncate px-2 text-[13px] leading-[27px]",
+                        c.kind === "edited" && "bg-highlight/25 ring-1 ring-highlight/80 ring-inset",
+                        c.kind === "added" && "bg-positive/15 ring-1 ring-positive/50 ring-inset",
+                        c.kind === "computed" && "border border-dashed border-info/50 bg-info/5",
+                        c.kind === "removed" && "bg-destructive/5 text-destructive/70 line-through",
+                      )}
+                      style={b}
+                    >
+                      {c.kind === "removed" ? c.was : null}
+                    </div>
+                  )
+                })}
+                {changes?.blocks.map((c, i) => {
+                  if ((c.kind !== "moved" && c.kind !== "removed") || !c.from || !near(c.from)) return null
+                  const box = cellBox(c.from.row, c.from.col, c.from.rows, c.from.cols)
+                  return (
+                    <div
+                      key={`was:${i}`}
+                      className={cn(
+                        "pointer-events-none absolute z-[3] flex items-start rounded-md border border-dashed p-1.5 text-xs",
+                        c.kind === "removed" ? "border-destructive/50 bg-destructive/5 text-destructive/80" : "border-foreground/25 text-muted-foreground",
+                      )}
+                      style={box}
+                    >
+                      {c.kind === "removed" ? `Removed ${c.label}` : `${c.label} was here`}
+                    </div>
+                  )
+                })}
+
                 {/* selection */}
                 {selBox && sel && (sel.rows > 1 || sel.cols > 1) && (
                   <div className="pointer-events-none absolute z-[5] bg-highlight/10 ring-1 ring-highlight-edge" style={selBox} />
@@ -786,6 +845,7 @@ export function SheetGrid({ sheet, ctx, selection, selectedBlock, onSelect, onSe
                   const box = cellBox(b.rect.row, b.rect.col, b.rect.rows, b.rect.cols)
                   const chosen = selectedBlock === b.index
                   const card = b.type !== "text"
+                  const change = blockChanges.get(b.index)
                   return (
                     <div
                       key={b.id}
@@ -793,8 +853,11 @@ export function SheetGrid({ sheet, ctx, selection, selectedBlock, onSelect, onSe
                       className={cn(
                         "group/block absolute z-[8] overflow-hidden rounded-md",
                         card ? "bg-card shadow-xs ring-1 ring-foreground/10" : "bg-background/90 hover:ring-1 hover:ring-foreground/10",
+                        change === "computed" && "outline-2 outline-offset-1 outline-info/50 outline-dashed",
+                        (change === "edited" || change === "added") && "outline-2 outline-offset-1 outline-highlight",
                         chosen && "ring-2 ring-highlight",
                       )}
+                      title={change ? (change === "computed" ? "Recalculated by the changes under review" : "Changed by the changes under review") : undefined}
                       style={{ left: box.left + 2, top: box.top + 2, width: box.width - 4, height: box.height - 4 }}
                       onMouseDown={(e) => {
                         if ((e.target as HTMLElement).closest("[data-drag-handle]") || b.type !== "chart") startBlockDrag(e, b, "move")

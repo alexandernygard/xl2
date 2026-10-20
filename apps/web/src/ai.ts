@@ -3,21 +3,20 @@ import { create } from "zustand"
 import {
   SDK_REFERENCE,
   address,
-  applyEdits,
   cellAt,
   cellLabel,
   isCellError,
   parseAddress,
   parseRange,
   rangeName,
-  replaceOnce,
   type CellValue,
   type EditIntent,
   type Literal,
+  type StepOp,
   type WorkbookModel,
 } from "@xl2/sdk"
 import { selectionRect } from "@xl2/viz"
-import { MAIN, useStore, type ChatMessage, type ChatPart } from "./store"
+import { MAIN, takeReviewNotes, useStore, type ChatMessage, type ChatPart } from "./store"
 import type { EvalResult } from "./evaluator"
 import { tsDiagnostics } from "./tsClient"
 
@@ -39,6 +38,9 @@ How to work:
 - Give every new block an \`at\` that doesn't overlap existing blocks or cells (the tool result reports overlaps).
 - Prefer formulas, queries and params over hard-coded computed numbers, so the sheet stays live.
 - After editing, the tool result tells you whether the workbook still evaluates. If it reports errors, fix them.
+- The user reviews your changes: each edit tool call is one item they accept or reject, and they see changed cells
+  highlighted. Give every edit a short \`summary\` (e.g. "Add margin column"), and keep unrelated changes in separate
+  calls so they can be judged on their own. Your changes are live in the workbook while they wait for review.
 - Keep replies short: say what you changed or found. The user can see the sheet, so don't repeat the whole table.
 
 ${SDK_REFERENCE}`
@@ -66,6 +68,7 @@ const tools: Anthropic.Tool[] = [
     input_schema: {
       type: "object",
       properties: {
+        summary: { type: "string", description: "A few words for the review list, e.g. \"Add margin column\"" },
         edits: {
           type: "array",
           items: {
@@ -94,6 +97,7 @@ const tools: Anthropic.Tool[] = [
       type: "object",
       properties: {
         file: { type: "string", description: "Data file name; omit for the workbook code" },
+        summary: { type: "string", description: "A few words for the review list, e.g. \"Add margin column\"" },
         old_string: { type: "string" },
         new_string: { type: "string" },
       },
@@ -108,6 +112,7 @@ const tools: Anthropic.Tool[] = [
       type: "object",
       properties: {
         file: { type: "string", description: "Data file name like \"sales.csv\"; omit for the workbook code" },
+        summary: { type: "string", description: "A few words for the review list, e.g. \"Add margin column\"" },
         source: { type: "string", description: "The full file contents" },
       },
       required: ["source"],
@@ -147,7 +152,7 @@ function patchTool(fileId: string, id: string, patch: Partial<Extract<ChatPart, 
 
 // --- tools -------------------------------------------------------------------
 
-type ToolOutput = { content: string; isError?: boolean; summary: string }
+type ToolOutput = { content: string; isError?: boolean; summary: string; stepId?: string }
 
 function evalReport(r: EvalResult): string {
   if (!r.ok) return `The workbook no longer runs: ${r.error.message}${r.error.line ? ` (line ${r.error.line})` : ""}. Fix it.`
@@ -169,15 +174,23 @@ function evalReport(r: EvalResult): string {
   return problems.length ? `Evaluates, but with problems:\n- ${problems.join("\n- ")}` : "Workbook evaluates without errors."
 }
 
-async function commit(bundle: { source: string; files: Record<string, string> }): Promise<string> {
-  const codeChanged = bundle.source !== useStore.getState().bundle().source
-  const report = evalReport(await useStore.getState().setBundle(bundle, "ai"))
-  if (!codeChanged) return report
+/** The assistant message being written, so its edits are tied to it in the review list. */
+let currentMessage: string | undefined
+
+/** Apply an edit as a draft step for review, and report how the workbook evaluates afterwards. */
+async function commit(op: StepOp, input: any, fallback: string): Promise<ToolOutput> {
+  const label = typeof input?.summary === "string" && input.summary.trim() ? input.summary.trim() : fallback
+  const before = useStore.getState().bundle().source
+  const r = await useStore.getState().applyStep(op, "ai", label, currentMessage)
+  if (!r.ok) return { content: r.error, isError: true, summary: label }
+  const out: ToolOutput = { content: evalReport(r.result), summary: label, stepId: r.stepId }
+  const source = useStore.getState().bundle().source
+  if (source === before) return out
   // type errors often point at the real mistake before it shows up as a runtime error
-  const types = (await tsDiagnostics(bundle.source))?.filter((d) => d.severity === "error") ?? []
-  if (!types.length) return report
-  const lineOf = (pos: number) => bundle.source.slice(0, pos).split("\n").length
-  return `${report}\nType errors:\n${types.slice(0, 8).map((d) => `- line ${lineOf(d.from)}: ${d.message}`).join("\n")}`
+  const types = (await tsDiagnostics(source))?.filter((d) => d.severity === "error") ?? []
+  if (!types.length) return out
+  const lineOf = (pos: number) => source.slice(0, pos).split("\n").length
+  return { ...out, content: `${out.content}\nType errors:\n${types.slice(0, 8).map((d) => `- line ${lineOf(d.from)}: ${d.message}`).join("\n")}` }
 }
 
 const cellJson = (v: CellValue) => (isCellError(v) ? `#ERR: ${v.error}` : v)
@@ -309,34 +322,40 @@ async function runTool(name: string, input: any): Promise<ToolOutput> {
       if (!Array.isArray(edits) || !edits.length) return { content: "Invalid input: edits must be a non-empty array", isError: true, summary: "Set cells" }
       const intents = cellEdits(store.model, edits)
       if (typeof intents === "string") return { content: intents, isError: true, summary: "Set cells" }
-      const r = applyEdits(bundle, intents)
-      if (!r.ok) return { content: r.error, isError: true, summary: `Set ${edits.length} cells` }
-      return { content: await commit(r.bundle), summary: `Set ${edits.length} cell${edits.length === 1 ? "" : "s"}` }
+      return commit({ kind: "intents", intents }, input, `Set ${edits.length} cell${edits.length === 1 ? "" : "s"}`)
     }
     case "edit_code": {
       if (typeof input?.old_string !== "string" || typeof input?.new_string !== "string")
         return { content: "Invalid input: old_string and new_string are required strings", isError: true, summary: "Edit code" }
       const file = typeof input.file === "string" && input.file !== MAIN ? input.file : null
       if (file && !(file in bundle.files)) return { content: `No data file "${file}". Use write_code to create it.`, isError: true, summary: `Edit ${file}` }
-      const r = replaceOnce(file ? bundle.files[file] : bundle.source, input.old_string, input.new_string)
-      if (!r.ok) return { content: r.error, isError: true, summary: file ? `Edit ${file}` : "Edit code" }
       const lines = input.new_string.split("\n").length
-      const next = file ? { ...bundle, files: { ...bundle.files, [file]: r.source } } : { ...bundle, source: r.source }
-      return { content: await commit(next), summary: `Edited ${file ?? "code"} (${lines} line${lines === 1 ? "" : "s"})` }
+      return commit(
+        { kind: "replace", file: file ?? MAIN, old: input.old_string, new: input.new_string },
+        input,
+        `Edited ${file ?? "code"} (${lines} line${lines === 1 ? "" : "s"})`,
+      )
     }
     case "write_code": {
       if (typeof input?.source !== "string" || (!input.file && !input.source.trim()))
         return { content: "Invalid input: source is required", isError: true, summary: "Write code" }
       const file = typeof input.file === "string" && input.file !== MAIN ? input.file : null
       if (file && !/^[\w.-]+\.csv$/.test(file)) return { content: "Data file names must look like name.csv", isError: true, summary: `Write ${file}` }
-      const next = file ? { ...bundle, files: { ...bundle.files, [file]: input.source } } : { ...bundle, source: input.source }
-      return { content: await commit(next), summary: `Wrote ${file ?? "workbook"} (${input.source.split("\n").length} lines)` }
+      return commit({ kind: "write", file: file ?? MAIN, text: input.source }, input, `Wrote ${file ?? "workbook"} (${input.source.split("\n").length} lines)`)
     }
   }
   return { content: `Unknown tool ${name}`, isError: true, summary: name }
 }
 
 // --- the loop ----------------------------------------------------------------
+
+/** What happened to Claude's earlier changes: rejections since the last message, and what still waits for review. */
+function review(fileId: string): string {
+  const lines = takeReviewNotes(fileId)
+  const pending = useStore.getState().draft()?.steps.filter((s) => s.author === "ai" && s.status === "pending") ?? []
+  if (pending.length) lines.push(`Still awaiting the user's review (applied in the code above): ${pending.map((s) => s.label).join("; ")}`)
+  return lines.length ? `<review>\n${lines.join("\n")}\n</review>` : ""
+}
 
 export async function send(userText: string) {
   const store = useStore.getState()
@@ -365,10 +384,12 @@ export async function send(userText: string) {
     selText,
     sheet ? `<active_sheet>${sheet.name}</active_sheet>` : "",
     store.error ? `<current_error>${store.error.message}</current_error>` : "",
+    review(fileId),
   ]
     .filter(Boolean)
     .join("\n")
 
+  const assistantId = crypto.randomUUID()
   const transcript = [
     ...(useChat.getState().transcripts[fileId] ?? []),
     { role: "user" as const, content: [{ type: "text" as const, text: `${context}\n\n${userText}` }] },
@@ -382,10 +403,11 @@ export async function send(userText: string) {
       [fileId]: [
         ...(s.messages[fileId] ?? []),
         { id: crypto.randomUUID(), role: "user", parts: [{ type: "text", text: userText }] },
-        { id: crypto.randomUUID(), role: "assistant", parts: [] },
+        { id: assistantId, role: "assistant", parts: [] },
       ],
     },
   }))
+  currentMessage = assistantId
 
   const save = () => useChat.setState((s) => ({ transcripts: { ...s.transcripts, [fileId]: [...transcript] } }))
 
@@ -455,7 +477,7 @@ export async function send(userText: string) {
         } catch (e) {
           out = { content: String(e), isError: true, summary: u.name }
         }
-        patchTool(fileId, u.id, { summary: out.summary, status: out.isError ? "error" : "ok", detail: out.content })
+        patchTool(fileId, u.id, { summary: out.summary, status: out.isError ? "error" : "ok", detail: out.content, stepId: out.stepId })
         results.push({ type: "tool_result", tool_use_id: u.id, content: out.content, is_error: out.isError })
       }
       transcript.push({ role: "user", content: results })
@@ -469,6 +491,7 @@ export async function send(userText: string) {
     save()
     updateLast(fileId, (m) => ({ ...m, error: aborted ? "Stopped." : errorMessage(e) }))
   } finally {
+    currentMessage = undefined
     useChat.setState({ running: false, abort: null })
   }
 }

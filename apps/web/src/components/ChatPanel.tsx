@@ -43,6 +43,7 @@ import { cellAt, cellLabel, rangeName } from "@xl2/sdk"
 import { selectionRect } from "@xl2/viz"
 import { clearChat, send, stop, useChat } from "../ai"
 import { useStore, type ChatPart } from "../store"
+import { ChatReviewBar, StepControls } from "./Review"
 
 const NO_MESSAGES: never[] = []
 
@@ -101,7 +102,7 @@ export function ChatPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
           <div className="flex h-full flex-col justify-end gap-3 p-4">
             <p className="font-heading text-xl">What should this workbook do?</p>
             <p className="text-sm text-muted-foreground">
-              Claude reads and edits the workbook code directly. Every change shows up in the sheet and the code, and you can undo it.
+              Claude reads and edits the workbook code directly. Its changes show up highlighted in the sheet, and you accept or reject each one.
             </p>
             {!apiKey && (
               <Button variant="outline" size="sm" className="self-start" onClick={onOpenSettings}>
@@ -157,6 +158,7 @@ export function ChatPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
           submit()
         }}
       >
+        <ChatReviewBar />
         {selection && sheet && (
           <p className="mb-1.5 truncate text-xs text-muted-foreground">
             Context:{" "}
@@ -235,11 +237,12 @@ function Part({ part, user }: { part: ChatPart; user: boolean }) {
   const Icon = TOOL_ICON[part.name] ?? CodeIcon
   return (
     <Trace>
-      <TraceLine title={part.detail}>
+      <TraceLine title={part.detail} className={cn(part.stepId && "w-full")}>
         <TraceIcon>{part.status === "running" ? <Spinner /> : <Icon />}</TraceIcon>
         <TraceTitle className={cn(part.status === "error" && "text-destructive")}>{part.summary}</TraceTitle>
         {part.status === "error" && <TraceDescription>failed</TraceDescription>}
         {part.status === "ok" && part.detail?.startsWith("Evaluates, but") && <TraceDescription className="text-warning">errors</TraceDescription>}
+        {part.stepId && <StepControls stepId={part.stepId} />}
       </TraceLine>
     </Trace>
   )

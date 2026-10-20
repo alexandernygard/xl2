@@ -2,12 +2,20 @@ import { create } from "zustand"
 import { persist } from "zustand/middleware"
 import {
   applyEdits,
+  applyOp,
+  bundleOp,
   cellAt,
+  diffModels,
   examples,
   locate,
+  parseAddress,
+  replay,
+  textEdit,
+  touchedCells,
   type Bundle,
   type EditIntent,
   type Range,
+  type StepOp,
   type Target,
   type WorkbookModel,
 } from "@xl2/sdk"
@@ -30,12 +38,40 @@ export interface FileDoc {
   source: string
   files: Record<string, string>
   updatedAt: number
+  /** Claude's changes awaiting review. The bundle above already includes them. */
+  draft?: Draft
 }
+
+export type StepStatus = "pending" | "accepted" | "rejected"
+
+/** One recorded change while a draft is open: a Claude tool call, or an edit of yours. */
+export interface DraftStep {
+  id: string
+  author: "ai" | "user"
+  label: string
+  op: StepOp
+  /** Your own edits are accepted from the start; only Claude's wait for review. */
+  status: StepStatus
+  /** The assistant message whose tool call made it. */
+  messageId?: string
+  /** The first cell it changed, to jump to, and how many it changed directly. */
+  focus?: { sheet: string; address: string }
+  cells?: number
+  at: number
+}
+
+export interface Draft {
+  /** The workbook before Claude's first change. */
+  base: Bundle
+  steps: DraftStep[]
+}
+
+export type StepOutcome = StepStatus | "conflict"
 
 export type ChatPart =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool"; id: string; name: string; summary: string; status: "running" | "ok" | "error"; detail?: string }
+  | { type: "tool"; id: string; name: string; summary: string; status: "running" | "ok" | "error"; detail?: string; stepId?: string }
 
 export interface ChatMessage {
   id: string
@@ -74,11 +110,27 @@ interface State {
   codeFile: string
   /** Bumped whenever a file changes from outside the code editor. */
   externalRev: number
+  /** The evaluated draft base, to diff the current model against. */
+  baseModel: WorkbookModel | null
+  /** Draft steps that no longer apply after a rejection, with why. */
+  conflicts: Record<string, string>
+  /** How reviewed steps ended, after their draft closed (for the chat). */
+  decided: Record<string, StepOutcome>
+  /** Ask the grid to scroll a cell into view. */
+  scrollRequest: { row: number; col: number; nonce: number } | null
 
   bundle(): Bundle
   setBundle(bundle: Bundle, origin: Origin): Promise<EvalResult>
   setFileText(file: string, text: string, origin: Origin): Promise<EvalResult>
   applyIntent(intent: EditIntent | EditIntent[]): string | null
+  /** Record a change as a draft step (Claude's open or extend a draft; yours only join an open one). */
+  applyStep(op: StepOp, author: DraftStep["author"], label: string, messageId?: string): Promise<StepResult>
+  draft(): Draft | undefined
+  reviewStep(id: string, status: StepStatus): void
+  acceptAll(): void
+  rejectAll(): void
+  /** Show a cell: switch to its sheet, select it and scroll to it. */
+  goTo(sheet: string, address: string): void
   /** Resolves with the evaluation of the latest change. */
   settle(): Promise<EvalResult>
   undo(): void
@@ -98,8 +150,44 @@ interface State {
   deleteFile(id: string): void
 }
 
+export type StepResult = { ok: true; stepId?: string; result: EvalResult } | { ok: false; error: string }
+
 const uid = () => Math.random().toString(36).slice(2, 10)
 
+/** File text before each of your code-editor steps, so typing coalesces into one step. */
+const editorBefore = new Map<string, { file: string; text: string }>()
+
+/** What the user decided since Claude last looked, per file; the next message tells Claude. */
+const reviewNotes: Record<string, string[]> = {}
+export function takeReviewNotes(fileId: string): string[] {
+  const notes = reviewNotes[fileId] ?? []
+  delete reviewNotes[fileId]
+  return notes
+}
+
+/** A label for your own edit, from its intents. */
+function describe(intents: EditIntent[]): string {
+  const i = intents[0]
+  const more = intents.length > 1 ? ` (+${intents.length - 1})` : ""
+  switch (i?.type) {
+    case "setCell":
+    case "setOverride":
+      return `Edited ${i.table}[${i.row}].${i.column}${more}`
+    case "setFreeCell":
+    case "setCellStyle":
+      return `Edited ${i.address}${more}`
+    case "setParam":
+      return `Set ${i.name}${more}`
+    case "addRow":
+      return `Added a row to ${i.table}${more}`
+    case "deleteRow":
+      return `Deleted a row of ${i.table}${more}`
+    case "moveBlock":
+      return `Moved a block to ${i.at}${more}`
+    default:
+      return `Your edit${more}`
+  }
+}
 function initialFiles() {
   const files: Record<string, FileDoc> = {}
   const order: string[] = []
@@ -116,6 +204,7 @@ const sameBundle = (a: Bundle, b: Bundle) =>
   a.source === b.source && Object.keys(a.files).length === Object.keys(b.files).length && Object.entries(a.files).every(([k, v]) => b.files[k] === v)
 
 let evalRev = 0
+let baseInFlight: Bundle | null = null
 let lastEval: Promise<EvalResult> = Promise.resolve({ ok: false, error: { message: "Not evaluated yet" } })
 
 export const useStore = create<State>()(
@@ -140,7 +229,53 @@ export const useStore = create<State>()(
           })
           return r
         })
+        const draft = get().files[fileId]?.draft
+        if (draft && !get().baseModel && baseInFlight !== draft.base) {
+          const base = (baseInFlight = draft.base)
+          evaluateBundle(base).then((r) => {
+            if (baseInFlight === base) baseInFlight = null
+            if (r.ok && get().activeId === fileId && get().files[fileId]?.draft?.base === draft.base) set({ baseModel: r.model })
+          })
+        }
         return lastEval
+      }
+
+      function writeDraft(draft: Draft | undefined, bundle: Bundle, external = true) {
+        const { activeId } = get()
+        set((s) => ({
+          files: { ...s.files, [activeId]: { ...s.files[activeId], source: bundle.source, files: bundle.files, draft, updatedAt: Date.now() } },
+          externalRev: external ? s.externalRev + 1 : s.externalRev,
+          codeFile: s.codeFile === MAIN || s.codeFile in bundle.files ? s.codeFile : MAIN,
+        }))
+      }
+
+      /** Re-apply the draft's steps onto its base, leaving out rejected ones. */
+      function rebuild(draft: Draft) {
+        const r = replay(draft.base, draft.steps.map((st) => (st.status === "rejected" ? null : st.op)))
+        set({ conflicts: Object.fromEntries([...r.failed].map(([i, e]) => [draft.steps[i].id, e])) })
+        writeDraft(draft, r.bundle)
+        schedule()
+      }
+
+      /** Close the draft once nothing of Claude's waits for review: it becomes one undo step. */
+      function finalize() {
+        const { activeId, conflicts } = get()
+        const draft = get().files[activeId]?.draft
+        if (!draft || draft.steps.some((st) => st.author === "ai" && st.status === "pending")) return
+        const cur = get().bundle()
+        const h = get().history[activeId] ?? { past: [], future: [], lastPush: 0 }
+        const outcome = (st: DraftStep): StepOutcome => (conflicts[st.id] ? "conflict" : st.status)
+        const notes = draft.steps
+          .filter((st) => st.author === "ai" && outcome(st) !== "accepted")
+          .map((st) => `${outcome(st) === "conflict" ? "Dropped (depended on a rejected change)" : "Rejected"}: ${st.label}`)
+        if (notes.length) (reviewNotes[activeId] ??= []).push(...notes)
+        set((s) => ({
+          decided: { ...s.decided, ...Object.fromEntries(draft.steps.map((st) => [st.id, outcome(st)])) },
+          history: sameBundle(draft.base, cur) ? s.history : { ...s.history, [activeId]: { past: [...h.past, draft.base].slice(-200), future: [], lastPush: 0 } },
+          baseModel: null,
+          conflicts: {},
+        }))
+        writeDraft(undefined, cur, false)
       }
 
       function write(bundle: Bundle, history: History, external: boolean) {
@@ -170,16 +305,42 @@ export const useStore = create<State>()(
         reveal: null,
         codeFile: MAIN,
         externalRev: 0,
+        baseModel: null,
+        conflicts: {},
+        decided: {},
+        scrollRequest: null,
 
         bundle: () => {
           const f = get().files[get().activeId]
           return { source: f?.source ?? "", files: f?.files ?? {} }
         },
 
+        draft: () => get().files[get().activeId]?.draft,
+
         setBundle(bundle, origin) {
           const { activeId } = get()
           const cur = get().bundle()
           if (sameBundle(cur, bundle)) return lastEval
+          const draft = get().draft()
+          if (draft) {
+            // while Claude's changes await review, your edits join the draft as accepted steps
+            const last = draft.steps[draft.steps.length - 1]
+            const prev = last && editorBefore.get(last.id)
+            const changed = bundle.source !== cur.source ? MAIN : Object.keys(bundle.files).find((f) => bundle.files[f] !== cur.files[f])
+            if (origin === "editor" && last?.author === "user" && prev && prev.file === changed && Date.now() - last.at < COALESCE_MS) {
+              const text = changed === MAIN ? bundle.source : bundle.files[changed]
+              const op = textEdit(changed, prev.text, text)
+              const steps = op ? [...draft.steps.slice(0, -1), { ...last, op, at: Date.now() }] : draft.steps.slice(0, -1)
+              writeDraft({ ...draft, steps }, bundle, false)
+              return schedule()
+            }
+            const op = bundleOp(cur, bundle)
+            if (!op) return lastEval
+            const step: DraftStep = { id: uid(), author: "user", label: origin === "editor" ? `Edited ${changed === MAIN ? "code" : changed}` : "Your edit", op, status: "accepted", at: Date.now() }
+            if (origin === "editor" && changed) editorBefore.set(step.id, { file: changed, text: changed === MAIN ? cur.source : cur.files[changed] })
+            writeDraft({ ...draft, steps: [...draft.steps, step] }, bundle, origin !== "editor")
+            return schedule()
+          }
           const h = get().history[activeId] ?? { past: [], future: [], lastPush: 0 }
           const now = Date.now()
           // typing in the editor coalesces into one undo step
@@ -195,16 +356,91 @@ export const useStore = create<State>()(
         },
 
         applyIntent(intent) {
-          const r = applyEdits(get().bundle(), Array.isArray(intent) ? intent : [intent])
+          const intents = Array.isArray(intent) ? intent : [intent]
+          const r = applyEdits(get().bundle(), intents)
           if (!r.ok) return r.error
-          get().setBundle(r.bundle, "grid")
+          if (get().draft()) get().applyStep({ kind: "intents", intents }, "user", describe(intents))
+          else get().setBundle(r.bundle, "grid")
           return null
+        },
+
+        async applyStep(op, author, label, messageId) {
+          const cur = get().bundle()
+          const r = applyOp(cur, op)
+          if (!r.ok) return { ok: false, error: r.error }
+          if (sameBundle(cur, r.bundle)) return { ok: true, result: await lastEval }
+          let draft = get().draft()
+          if (!draft && author === "user") return { ok: true, result: await get().setBundle(r.bundle, "grid") }
+          if (!draft) {
+            draft = { base: cur, steps: [] }
+            set({ baseModel: get().error || get().evaluating ? null : get().model, conflicts: {} })
+          }
+          const step: DraftStep = { id: uid(), author, label, op, status: author === "ai" ? "pending" : "accepted", messageId, at: Date.now() }
+          const before = get().model
+          writeDraft({ ...draft, steps: [...draft.steps, step] }, r.bundle)
+          const result = await schedule()
+          if (result.ok && before) {
+            // where this step landed, for jumping to it from the review list
+            const touched = touchedCells(diffModels(before, result.model))
+            const d = get().draft()
+            if (d?.steps.some((st) => st.id === step.id)) {
+              const steps = d.steps.map((st) => (st.id === step.id ? { ...st, focus: touched[0], cells: touched.length } : st))
+              writeDraft({ ...d, steps }, get().bundle(), false)
+            }
+          }
+          return { ok: true, stepId: step.id, result }
+        },
+
+        reviewStep(id, status) {
+          const draft = get().draft()
+          const step = draft?.steps.find((st) => st.id === id)
+          if (!draft || !step || step.status === status) return
+          const next = { ...draft, steps: draft.steps.map((st) => (st.id === id ? { ...st, status } : st)) }
+          if (step.status === "rejected" || status === "rejected") rebuild(next)
+          else writeDraft(next, get().bundle(), false)
+          finalize()
+        },
+
+        acceptAll() {
+          const draft = get().draft()
+          if (!draft) return
+          writeDraft({ ...draft, steps: draft.steps.map((st) => (st.status === "pending" ? { ...st, status: "accepted" } : st)) }, get().bundle(), false)
+          finalize()
+        },
+
+        rejectAll() {
+          const draft = get().draft()
+          if (!draft) return
+          rebuild({ ...draft, steps: draft.steps.map((st) => (st.author === "ai" ? { ...st, status: "rejected" } : st)) })
+          finalize()
         },
 
         settle: () => lastEval,
 
+        goTo(sheetName, a) {
+          const i = get().model?.sheets.findIndex((sh) => sh.name === sheetName) ?? -1
+          const p = parseAddress(a)
+          if (i < 0 || !p) return
+          if (i !== get().activeSheet) get().setActiveSheet(i)
+          if (get().view === "code") set({ view: "split" })
+          get().select({ anchor: p, focus: p })
+          set({ scrollRequest: { ...p, nonce: Date.now() } })
+        },
+
         undo() {
           const { activeId, history } = get()
+          const draft = get().draft()
+          if (draft) {
+            // inside a draft, undo takes back the latest step, whoever made it
+            const steps = draft.steps.slice(0, -1)
+            if (steps.length) rebuild({ ...draft, steps })
+            else {
+              writeDraft(undefined, draft.base)
+              set({ baseModel: null, conflicts: {} })
+              schedule()
+            }
+            return
+          }
           const h = history[activeId]
           if (!h?.past.length) return
           const prev = h.past[h.past.length - 1]
@@ -213,6 +449,7 @@ export const useStore = create<State>()(
         },
 
         redo() {
+          if (get().draft()) return
           const { activeId, history } = get()
           const h = history[activeId]
           if (!h?.future.length) return
@@ -275,6 +512,8 @@ export const useStore = create<State>()(
             codeFile: MAIN,
             model: null,
             error: null,
+            baseModel: null,
+            conflicts: {},
             externalRev: s.externalRev + 1,
           }))
           schedule()
@@ -282,7 +521,7 @@ export const useStore = create<State>()(
 
         openFile(id) {
           if (!get().files[id]) return
-          set((s) => ({ activeId: id, activeSheet: 0, selection: null, selectedBlock: null, codeFile: MAIN, model: null, error: null, externalRev: s.externalRev + 1 }))
+          set((s) => ({ activeId: id, activeSheet: 0, selection: null, selectedBlock: null, codeFile: MAIN, model: null, error: null, baseModel: null, conflicts: {}, externalRev: s.externalRev + 1 }))
           schedule()
         },
 

@@ -12,3 +12,4 @@ export { translateFormula, compileFormula, isFormula, shiftFormula } from "./for
 export * from "./grid"
 export { SDK_REFERENCE } from "./reference"
 export * from "./examples"
+export * from "./diff"

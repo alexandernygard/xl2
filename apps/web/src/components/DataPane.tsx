@@ -16,6 +16,7 @@ import {
   type SheetModel,
   type TableModel,
 } from "@xl2/sdk"
+import { ReviewBar, useDiff } from "./Review"
 import { SheetGrid, SheetTabs, selectionRect, type GridAction, type SheetGridHandle } from "@xl2/viz"
 import {
   Button,
@@ -377,6 +378,23 @@ export function DataPane() {
   const { select, selectBlock, applyIntent, setActiveSheet, revealTarget, setView } = useStore.getState()
   const grid = React.useRef<SheetGridHandle>(null)
   const sheet = useActiveSheet()
+  const diff = useDiff()
+  const scrollRequest = useStore((s) => s.scrollRequest)
+  const sheetChanges = React.useMemo(() => diff?.sheets.find((d) => d.sheet === sheet?.name) ?? null, [diff, sheet?.name])
+  const marked = React.useMemo(
+    () => diff?.sheets.flatMap((d, i) => (Object.keys(d.cells).length || d.blocks.length || d.added ? [i] : [])) ?? [],
+    [diff],
+  )
+
+  // jumps from the review list: the grid may have just remounted for another sheet
+  React.useEffect(() => {
+    if (!scrollRequest) return
+    const id = requestAnimationFrame(() => {
+      grid.current?.scrollTo(scrollRequest.row, scrollRequest.col)
+      grid.current?.focus()
+    })
+    return () => cancelAnimationFrame(id)
+  }, [scrollRequest])
   const ctx = React.useMemo(() => ({ locale: model?.locale ?? "en-US", currency: model?.currency ?? "USD" }), [model?.locale, model?.currency])
 
   const onIntent = React.useCallback((intent: Parameters<typeof applyIntent>[0]) => report(useStore.getState().applyIntent(intent)), [])
@@ -421,6 +439,7 @@ export function DataPane() {
           )}
         </div>
       )}
+      <ReviewBar diff={diff} />
       {model && model.issues.length > 0 && (
         <details className="shrink-0 border-b bg-warning/10 px-3 py-1.5 text-xs text-warning">
           <summary className="cursor-pointer">
@@ -447,6 +466,7 @@ export function DataPane() {
           onIntent={onIntent}
           onError={onError}
           onAction={onAction}
+          changes={sheetChanges}
         />
       ) : (
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">{error ? "" : <Spinner />}</div>
@@ -457,6 +477,7 @@ export function DataPane() {
           sheets={model.sheets}
           active={Math.min(activeSheet, model.sheets.length - 1)}
           onChange={setActiveSheet}
+          marked={marked}
           onRename={(i, name) => report(applyIntent({ type: "renameSheet", sheet: model.sheets[i].name, name }))}
           onAdd={(name) => {
             if (model.sheets.some((s) => s.name === name)) return void toast.error(`A sheet named "${name}" already exists`)

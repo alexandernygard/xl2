@@ -8,11 +8,13 @@ export interface SheetTabsProps {
   onChange: (index: number) => void
   onAdd?: (name: string) => void
   onRename?: (index: number, name: string) => void
+  /** Sheets with changes under review get a dot. */
+  marked?: number[]
   className?: string
 }
 
 /** Excel-style sheet tabs. */
-export function SheetTabs({ sheets, active, onChange, onAdd, onRename, className }: SheetTabsProps) {
+export function SheetTabs({ sheets, active, onChange, onAdd, onRename, marked, className }: SheetTabsProps) {
   const [adding, setAdding] = React.useState(false)
   const [name, setName] = React.useState("")
   const [renaming, setRenaming] = React.useState<number | null>(null)
@@ -45,6 +47,7 @@ export function SheetTabs({ sheets, active, onChange, onAdd, onRename, className
           )}
         >
           {s.name}
+          {marked?.includes(i) && <span aria-label="has changes" className="ml-1.5 inline-block size-1.5 rounded-full bg-highlight align-middle" />}
         </button>
         ),
       )}

@@ -44,6 +44,15 @@ code + CSV files ──worker: run()──▶ WorkbookModel (values placed on ea
   - `write_code`: replaces the code, or creates a data file.
 
   After each edit Claude gets back the evaluation result, layout overlaps and type errors.
+- **Review.** Claude's edits apply right away but open a draft. Each tool call is one change you accept or reject, from its row in the chat or all at once from the bar above the grid. The grid shows each change:
+  - Cells Claude edited are tinted.
+  - Added cells are green.
+  - Recalculated cells get a dashed outline.
+  - Removed values are struck through.
+  - Moved blocks leave an outline where they were.
+  - Hovering a changed cell shows its old value.
+
+  The bar also shows how headline numbers moved (metrics and table totals). Your own edits during a draft are recorded too and kept when you reject Claude's. Rejecting a change replays the others onto the original; a change that depended on a rejected one is flagged and dropped. A closed draft is one undo step, and Claude is told what you rejected.
 
 ## Limitations and next steps
 
@@ -53,5 +62,6 @@ code + CSV files ──worker: run()──▶ WorkbookModel (values placed on ea
 4. **The sandbox is a worker, not a security boundary for hostile code.** Workbook code runs in a Web Worker without network, storage or DOM access and is stopped after 3 s, so it can't read the API key or freeze the page. Parsing for edits (Babel) still runs on the main thread.
 5. **Typed rows are missing.** The checker catches wrong builder names, options and types, but `r.unitz` inside a formula isn't an error, because rows are `Record<string, any>`.
 6. **Cell formulas are JS with A1 sugar, not Excel syntax.** Use `==`, `&&` and `"text"` (`<>` is accepted). There are no array formulas, named ranges or conditional formatting yet.
-7. **Grid gaps.** There is no row insert or delete for free cells, no merged free cells, no per-cell number format inside tables (formats are per column), and no undo grouping across an AI turn.
-8. **Assistant state.** The conversation isn't saved across reloads, and every user message includes the full code.
+7. **Grid gaps.** There is no row insert or delete for free cells, no merged free cells, and no per-cell number format inside tables (formats are per column).
+8. **Assistant state.** The conversation isn't saved across reloads, and every user message includes the full code. Pending drafts are saved, but after a reload you review them only from the bar above the grid.
+9. **Review gaps.** There's no code merge view yet, and no per-chunk review inside one tool call. Rows are matched by position, so a row inserted mid-table marks every row below it as changed.
