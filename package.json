@@ -6,7 +6,11 @@
     "dev": "pnpm --filter @xl2/web dev",
     "build": "pnpm --filter @xl2/web build",
     "test": "pnpm --filter @xl2/sdk test",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "deploy": "pnpm build && wrangler deploy"
   },
-  "packageManager": "pnpm@12.14.0"
+  "packageManager": "pnpm@12.14.0",
+  "devDependencies": {
+    "wrangler": "^4.151.2"
+  }
 }
