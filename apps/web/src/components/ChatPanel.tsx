@@ -39,6 +39,8 @@ import {
   SparklesIcon,
   SquareIcon,
 } from "lucide-react"
+import { cellAt, cellLabel, rangeName } from "@xl2/sdk"
+import { selectionRect } from "@xl2/viz"
 import { clearChat, send, stop, useChat } from "../ai"
 import { useStore, type ChatPart } from "../store"
 
@@ -47,8 +49,8 @@ const NO_MESSAGES: never[] = []
 const SUGGESTIONS = [
   "Add a column for profit margin",
   "Which region grew most in the forecast?",
-  "Make a line chart of revenue per rep",
-  "Add 5 more realistic rows",
+  "Put a line chart of revenue per rep next to the table",
+  "Add a small summary block of totals in free cells",
 ]
 
 const TOOL_ICON: Record<string, React.ComponentType> = {
@@ -62,6 +64,7 @@ export function ChatPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
   const fileId = useStore((s) => s.activeId)
   const apiKey = useStore((s) => s.apiKey)
   const selection = useStore((s) => s.selection)
+  const sheet = useStore((s) => s.model?.sheets[s.activeSheet])
   const messages = useChat((s) => s.messages[fileId] ?? NO_MESSAGES)
   const running = useChat((s) => s.running)
   const [draft, setDraft] = React.useState("")
@@ -154,9 +157,16 @@ export function ChatPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
           submit()
         }}
       >
-        {selection && (
+        {selection && sheet && (
           <p className="mb-1.5 truncate text-xs text-muted-foreground">
-            Context: <code>{selection.table}[{selection.row}].{selection.column}</code>
+            Context:{" "}
+            <code>
+              {sheet.name}!{rangeName(selectionRect(selection))}
+              {(() => {
+                const info = cellAt(sheet, selection.focus.row, selection.focus.col)
+                return info.kind === "empty" || info.kind === "free" ? "" : ` · ${cellLabel(info)}`
+              })()}
+            </code>
           </p>
         )}
         <InputGroup>

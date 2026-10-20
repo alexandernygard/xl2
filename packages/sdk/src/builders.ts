@@ -3,6 +3,7 @@ import type {
   ChartDef,
   ChartKind,
   ColumnDef,
+  DataRef,
   EvalContext,
   FormulaFn,
   Literal,
@@ -10,6 +11,7 @@ import type {
   ParamDef,
   QueryDef,
   SheetDef,
+  SheetOptions,
   TableDef,
   TextDef,
   WorkbookDef,
@@ -22,8 +24,13 @@ export function workbook(name: string, sheets: SheetDef[], options: WorkbookOpti
   return { type: "workbook", name, sheets, ...options }
 }
 
-export function sheet(name: string, blocks: BlockDef[]): SheetDef {
-  return { type: "sheet", name, blocks }
+export function sheet(name: string, blocks: BlockDef[] = [], options: SheetOptions = {}): SheetDef {
+  return { type: "sheet", name, blocks, cells: options.cells ?? {}, widths: options.widths ?? {} }
+}
+
+/** Rows read from a CSV data file in the workbook bundle. The first line holds column keys. */
+export function data(file: string): DataRef {
+  return { type: "data", file }
 }
 
 export function table(
@@ -88,3 +95,5 @@ export const chart = {
   scatter: chartOf("scatter"),
 }
 
+
+export * from "./functions"

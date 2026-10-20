@@ -121,12 +121,14 @@ describe("evaluate", () => {
 describe("run (compile + execute source)", () => {
   it("runs every bundled example without errors", () => {
     for (const ex of examples) {
-      const r = run(ex.source)
+      const r = run(ex.source, ex.files)
       if (!r.ok) throw new Error(`${ex.id}: ${r.error.message}`)
-      const errors = r.model.sheets
-        .flatMap((s) => s.blocks)
-        .filter((b) => "error" in b && b.error)
+      const errors = r.model.sheets.flatMap((s) => [
+        ...s.blocks.filter((b) => "error" in b && b.error).map((b) => `${s.name} block ${b.index}: ${(b as any).error}`),
+        ...Object.entries(s.cells).filter(([, c]) => c.value && typeof c.value === "object").map(([a, c]) => `${s.name}!${a}: ${(c.value as any).error}`),
+      ])
       expect(errors, ex.id).toEqual([])
+      expect(r.model.issues, ex.id).toEqual([])
     }
   })
 

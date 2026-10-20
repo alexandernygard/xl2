@@ -1,5 +1,5 @@
 import * as React from "react"
-import { csvToTableCode, examples } from "@xl2/sdk"
+import { csvToDataTable, examples, rangeName } from "@xl2/sdk"
 import {
   Button,
   Dialog,
@@ -28,11 +28,13 @@ import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
+  cn,
   toast,
 } from "@alexandernygard/components"
 import {
   ChevronDownIcon,
   CodeIcon,
+  FileSpreadsheetIcon,
   Columns2Icon,
   DownloadIcon,
   FileIcon,
@@ -45,7 +47,7 @@ import {
   Undo2Icon,
   UploadIcon,
 } from "lucide-react"
-import { useStore, type View } from "./store"
+import { MAIN, useStore, type View } from "./store"
 import { CodeEditor } from "./components/CodeEditor"
 import { DataPane } from "./components/DataPane"
 import { ChatPanel } from "./components/ChatPanel"
@@ -109,15 +111,33 @@ export function App() {
 
 function CodePane() {
   const name = useStore((s) => s.files[s.activeId]?.name ?? "workbook")
+  const bundleFiles = useStore((s) => s.files[s.activeId]?.files)
+  const dataFiles = Object.keys(bundleFiles ?? {})
+  const codeFile = useStore((s) => s.codeFile)
+  const setCodeFile = useStore((s) => s.setCodeFile)
+  const tabs = [{ id: MAIN, label: fileName(name), Icon: CodeIcon }, ...dataFiles.map((f) => ({ id: f, label: f, Icon: FileSpreadsheetIcon }))]
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b bg-card px-3 text-xs text-muted-foreground">
-        <CodeIcon className="size-3.5" />
-        <span className="font-mono">{fileName(name)}</span>
-        <span className="ml-auto">Edits in the sheet rewrite this file</span>
+      <div className="flex h-10 shrink-0 items-end gap-0.5 overflow-x-auto border-b bg-card px-2" role="tablist" aria-label="Files">
+        {tabs.map(({ id, label, Icon }) => (
+          <button
+            key={id}
+            role="tab"
+            aria-selected={codeFile === id}
+            onClick={() => setCodeFile(id)}
+            className={cn(
+              "flex h-8 items-center gap-1.5 rounded-t-md border border-b-0 border-transparent px-3 font-mono text-xs whitespace-nowrap text-muted-foreground hover:text-foreground",
+              codeFile === id && "border-border bg-background text-foreground",
+            )}
+          >
+            <Icon className="size-3.5" />
+            {label}
+          </button>
+        ))}
+        <span className="ml-auto self-center pl-3 text-xs whitespace-nowrap text-muted-foreground">Edits in the grid rewrite these files</span>
       </div>
       <div className="min-h-0 flex-1">
-        <CodeEditor />
+        <CodeEditor key={codeFile} file={codeFile} />
       </div>
     </div>
   )
@@ -164,8 +184,8 @@ function Header({ onOpenSettings }: { onOpenSettings: () => void }) {
       </div>
       <div className="ml-auto flex items-center gap-2">
         <ToggleGroup type="single" variant="outline" size="sm" value={view} onValueChange={(v) => v && setView(v as View)} aria-label="Layout">
-          <ToggleGroupItem value="data" aria-label="Data only">
-            <TableIcon /> Data
+          <ToggleGroupItem value="data" aria-label="Grid only">
+            <TableIcon /> Grid
           </ToggleGroupItem>
           <ToggleGroupItem value="split" aria-label="Side by side">
             <Columns2Icon /> Split
@@ -192,13 +212,18 @@ function FileMenu({ name }: { name: string }) {
   const { newFile, openFile, deleteFile } = useStore.getState()
   const csvInput = React.useRef<HTMLInputElement>(null)
 
-  const download = () => {
-    const blob = new Blob([useStore.getState().source()], { type: "text/typescript" })
+  const save = (text: string, file: string, type: string) => {
+    const blob = new Blob([text], { type })
     const a = document.createElement("a")
     a.href = URL.createObjectURL(blob)
-    a.download = fileName(name)
+    a.download = file
     a.click()
     URL.revokeObjectURL(a.href)
+  }
+  const download = () => {
+    const b = useStore.getState().bundle()
+    save(b.source, fileName(name), "text/typescript")
+    for (const [f, text] of Object.entries(b.files)) save(text, f, "text/csv")
   }
 
   const importCsv = async (file: File) => {
@@ -207,20 +232,22 @@ function FileMenu({ name }: { name: string }) {
     const tableName = base.replace(/[^a-zA-Z0-9]+(.)?/g, (_, c) => (c ? c.toUpperCase() : "")).replace(/^[A-Z]/, (c) => c.toLowerCase()).replace(/^\d/, "t$&") || "data"
     const s = useStore.getState()
     const sheetName = base.slice(0, 30) || "Imported"
-    let code: string
+    if (s.model?.sheets.some((x) => x.name === sheetName)) return void toast.error(`A sheet named "${sheetName}" already exists`)
+    let table: ReturnType<typeof csvToDataTable>
     try {
-      code = csvToTableCode(tableName, text)
+      table = csvToDataTable(tableName, text, { at: rangeName({ row: 0, col: 0, rows: 1, cols: 1 }) })
     } catch (e) {
-      return toast.error(String((e as Error).message))
+      return void toast.error(String((e as Error).message))
     }
     const err = s.applyIntent([
+      { type: "addDataFile", file: table.file, text: table.data },
       { type: "addSheet", name: sheetName },
-      { type: "addBlock", sheet: sheetName, code },
+      { type: "addBlock", sheet: sheetName, code: table.code },
     ])
     if (err) toast.error(err)
     else {
-      s.setActiveSheet(useStore.getState().model!.sheets.length - 1)
-      toast.success(`Imported ${file.name} as table "${tableName}"`)
+      s.setActiveSheet(s.model?.sheets.length ?? 0)
+      toast.success(`Imported ${file.name} as table "${tableName}" backed by ${table.file}`)
     }
   }
 
@@ -247,7 +274,7 @@ function FileMenu({ name }: { name: string }) {
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent>
               {examples.map((ex) => (
-                <DropdownMenuItem key={ex.id} onSelect={() => newFile(ex.source)}>
+                <DropdownMenuItem key={ex.id} onSelect={() => newFile({ source: ex.source, files: { ...ex.files } })}>
                   {ex.name}
                 </DropdownMenuItem>
               ))}
@@ -257,7 +284,7 @@ function FileMenu({ name }: { name: string }) {
             <UploadIcon /> Import CSV as sheet
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={download}>
-            <DownloadIcon /> Download {fileName(name)}
+            <DownloadIcon /> Download files
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" disabled={order.length <= 1} onSelect={() => deleteFile(activeId)}>

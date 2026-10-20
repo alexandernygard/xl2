@@ -30,3 +30,16 @@ body {
   border-radius: 3px;
   transition: background 1.2s;
 }
+.cm-ts-hover {
+  max-width: 520px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.cm-ts-hover code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: pre-wrap;
+}
+.cm-ts-hover p {
+  margin-top: 4px;
+  color: var(--muted-foreground);
+}

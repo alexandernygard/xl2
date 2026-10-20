@@ -1,117 +1,20 @@
 import * as React from "react"
-import {
-  coerceInput,
-  editText,
-  formatValue,
-  isCellError,
-  kindForFormat,
-  type MetricModel,
-  type ParamModel,
-  type TextModel,
-} from "@xl2/sdk"
-import { Input, Slider, Switch, cn } from "@alexandernygard/components"
-import type { IntentHandler, ViewContext } from "./types"
+import { formatValue, isCellError, type MetricModel, type TextModel } from "@xl2/sdk"
+import { cn } from "@alexandernygard/components"
+import type { ViewContext } from "./types"
 
 export function MetricView({ metric, ctx }: { metric: MetricModel; ctx: ViewContext }) {
   const bad = isCellError(metric.value)
   return (
-    <div className="flex flex-col gap-1">
-      <span className="text-sm text-muted-foreground">{metric.title}</span>
+    <div className="flex min-w-0 flex-col">
+      <span className="truncate text-xs text-muted-foreground">{metric.title}</span>
       <span
-        className={cn("font-heading text-3xl tabular-nums", bad && "text-destructive")}
+        className={cn("truncate font-heading text-2xl leading-tight tabular-nums", bad && "text-destructive")}
         title={bad ? (metric.value as { error: string }).error : undefined}
       >
         {bad ? "#ERR" : formatValue(metric.value, metric.format, { ...ctx, decimals: metric.decimals })}
       </span>
-      {metric.caption && <span className="text-xs text-muted-foreground">{metric.caption}</span>}
-    </div>
-  )
-}
-
-export function ParamView({
-  param,
-  ctx,
-  onIntent,
-  onError,
-}: {
-  param: ParamModel
-  ctx: ViewContext
-  onIntent: IntentHandler
-  onError?: (m: string) => void
-}) {
-  const kind = kindForFormat(param.format)
-  const display = editText(param.value, kind)
-  const [draft, setDraft] = React.useState(display)
-  const [live, setLive] = React.useState<number | null>(null)
-  const [focused, setFocused] = React.useState(false)
-  React.useEffect(() => setDraft(display), [display])
-
-  const set = (value: string | number | boolean | null) => {
-    if (value !== param.value) onIntent({ type: "setParam", name: param.name, value })
-  }
-  const commit = () => {
-    const parsed = coerceInput(draft, kind, param.options)
-    if (!parsed.ok) {
-      onError?.(parsed.error)
-      setDraft(display)
-    } else set(parsed.value)
-  }
-
-  const numeric = typeof param.value === "number"
-  const hasRange = numeric && param.min !== undefined && param.max !== undefined
-
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-baseline justify-between gap-2">
-        <label htmlFor={`param-${param.name}`} className="text-sm text-muted-foreground">
-          {param.label}
-        </label>
-        <code className="text-[11px] text-muted-foreground/70">{param.name}</code>
-      </div>
-      {typeof param.value === "boolean" ? (
-        <Switch id={`param-${param.name}`} checked={param.value} onCheckedChange={(v) => set(v)} />
-      ) : param.options ? (
-        <select
-          id={`param-${param.name}`}
-          className="h-8 rounded-lg border bg-background px-2 text-sm"
-          value={String(param.value ?? "")}
-          onChange={(e) => set(e.target.value)}
-        >
-          {param.options.map((o) => (
-            <option key={o}>{o}</option>
-          ))}
-        </select>
-      ) : (
-        <Input
-          id={`param-${param.name}`}
-          value={live !== null ? formatValue(live, param.format, ctx) : focused ? draft : formatValue(param.value, param.format, ctx)}
-          className="font-heading text-xl tabular-nums"
-          onChange={(e) => setDraft(e.target.value)}
-          onFocus={() => setFocused(true)}
-          onBlur={() => {
-            setFocused(false)
-            commit()
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commit()
-            if (e.key === "Escape") setDraft(display)
-          }}
-        />
-      )}
-      {hasRange && (
-        <Slider
-          aria-label={param.label}
-          min={param.min}
-          max={param.max}
-          step={param.step ?? (param.max! - param.min!) / 100}
-          value={[live ?? (param.value as number)]}
-          onValueChange={([v]) => setLive(v)}
-          onValueCommit={([v]) => {
-            setLive(null)
-            set(+v.toPrecision(10))
-          }}
-        />
-      )}
+      {metric.caption && <span className="truncate text-xs text-muted-foreground">{metric.caption}</span>}
     </div>
   )
 }
@@ -151,7 +54,7 @@ export function TextView({ text }: { text: TextModel }) {
     } else blocks.push(<p key={blocks.length}>{inline(t)}</p>)
   }
   flush()
-  return <div className="space-y-2 text-sm leading-relaxed">{blocks}</div>
+  return <div className="space-y-1 text-sm leading-relaxed">{blocks}</div>
 }
 
 function inline(s: string): React.ReactNode[] {

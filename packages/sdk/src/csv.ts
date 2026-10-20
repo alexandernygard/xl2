@@ -1,7 +1,9 @@
+import { encodeCsvRow } from "./datafile"
 import { literalCode } from "./source"
 import type { Literal } from "./types"
 
-// CSV import: produces table code, so imported data becomes part of the file.
+// CSV import: either table code with literal rows, or a data file plus a
+// table that reads it with data("file.csv").
 
 export function parseCsv(text: string): string[][] {
   const rows: string[][] = []
@@ -43,8 +45,7 @@ function toKey(header: string, i: number) {
   return /^\d/.test(key) ? `c${key}` : key
 }
 
-/** Generate a `table(...)` call from CSV text. */
-export function csvToTableCode(name: string, text: string, indent = "    "): string {
+function inferColumns(text: string) {
   const [header, ...body] = parseCsv(text)
   if (!header) throw new Error("The CSV is empty")
   const keys = header.map(toKey)
@@ -62,14 +63,40 @@ export function csvToTableCode(name: string, text: string, indent = "    "): str
     if (kind === "boolean") return /^true$/i.test(v)
     return v
   }
-  const i2 = indent + "  "
-  const i3 = i2 + "  "
-  const cols = keys
+  return { header, body, keys, kinds, value }
+}
+
+function columnsCode(header: string[], keys: string[], kinds: string[], indent: string) {
+  return keys
     .map((k, i) => {
       const label = header[i].trim() !== k ? `{ label: ${JSON.stringify(header[i].trim())} }` : ""
-      return `${i3}${k}: col.${kinds[i]}(${label}),`
+      return `${indent}${k}: col.${kinds[i]}(${label}),`
     })
     .join("\n")
+}
+
+/** Generate a `table(...)` call with literal rows from CSV text. */
+export function csvToTableCode(name: string, text: string, indent = "    "): string {
+  const { header, body, keys, kinds, value } = inferColumns(text)
+  const i2 = indent + "  "
+  const i3 = i2 + "  "
+  const cols = columnsCode(header, keys, kinds, i3)
   const rows = body.map((r) => `${i3}[${keys.map((_, i) => literalCode(value(r[i], kinds[i]))).join(", ")}],`).join("\n")
   return `table(${JSON.stringify(name)}, {\n${i2}columns: {\n${cols}\n${i2}},\n${i2}rows: [\n${rows}\n${i2}],\n${indent}})`
+}
+
+/** A data file (header rewritten to column keys) plus a table that reads it. */
+export function csvToDataTable(
+  name: string,
+  text: string,
+  options: { at?: string; indent?: string } = {},
+): { code: string; file: string; data: string } {
+  const { header, body, keys, kinds, value } = inferColumns(text)
+  const indent = options.indent ?? "    "
+  const i2 = indent + "  "
+  const file = `${name}.csv`
+  const data = [encodeCsvRow(keys), ...body.map((r) => encodeCsvRow(keys.map((_, i) => value(r[i], kinds[i]))))].join("\n") + "\n"
+  const at = options.at ? `\n${i2}at: ${JSON.stringify(options.at)},` : ""
+  const code = `table(${JSON.stringify(name)}, {${at}\n${i2}columns: {\n${columnsCode(header, keys, kinds, i2 + "  ")}\n${i2}},\n${i2}rows: data(${JSON.stringify(file)}),\n${indent}})`
+  return { code, file, data }
 }

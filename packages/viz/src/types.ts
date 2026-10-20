@@ -1,10 +1,9 @@
-import type { EditIntent } from "@xl2/sdk"
+import type { Cell, EditIntent } from "@xl2/sdk"
 
-/** A selected cell in a table block. */
+/** A selected range on a sheet grid: the anchor stays put while the focus moves (shift+arrows). */
 export interface GridSelection {
-  table: string
-  row: number
-  column: string
+  anchor: Cell
+  focus: Cell
 }
 
 /** Views never change data themselves; they emit intents for the host to apply to the source. */

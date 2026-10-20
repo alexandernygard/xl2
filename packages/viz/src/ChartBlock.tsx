@@ -20,7 +20,8 @@ function compact(v: number, locale: string) {
 // CSS custom property names can't contain every character a key might.
 const cssKey = (k: string) => k.replace(/[^a-zA-Z0-9_-]/g, "_")
 
-export function ChartView({ chart, ctx }: { chart: ChartModel; ctx: ViewContext }) {
+/** `fill` makes the chart take its container's size (on the grid) instead of a fixed height. */
+export function ChartView({ chart, ctx, fill }: { chart: ChartModel; ctx: ViewContext; fill?: boolean }) {
   const fmt = (v: unknown) => (typeof v === "number" ? formatValue(v, chart.format, ctx) : String(v ?? ""))
 
   if (chart.error) return <p className="p-4 text-sm text-destructive">{chart.error}</p>
@@ -31,7 +32,7 @@ export function ChartView({ chart, ctx }: { chart: ChartModel; ctx: ViewContext 
     const data = chart.data.map((d, i) => ({ name: String(d[chart.x] ?? ""), value: d[s.key] ?? 0, fill: color(i) }))
     const config: ChartConfig = Object.fromEntries(data.map((d, i) => [d.name, { label: d.name, color: color(i) }]))
     return (
-      <ChartContainer config={config} className="mx-auto aspect-square max-h-72 w-full">
+      <ChartContainer config={config} className={fill ? "mx-auto h-full w-full aspect-auto" : "mx-auto aspect-square max-h-72 w-full"}>
         <PieChart>
           <ChartTooltip content={<ChartTooltipContent hideLabel nameKey="name" formatter={(v, n) => <TooltipRow name={String(n)} value={fmt(v)} />} />} />
           <Pie data={data} dataKey="value" nameKey="name" innerRadius="45%" strokeWidth={2} isAnimationActive={false}>
@@ -67,7 +68,7 @@ export function ChartView({ chart, ctx }: { chart: ChartModel; ctx: ViewContext 
   const keys = chart.series.map((s) => cssKey(s.key))
 
   return (
-    <ChartContainer config={config} className="aspect-auto h-64 w-full">
+    <ChartContainer config={config} className={fill ? "aspect-auto h-full w-full" : "aspect-auto h-64 w-full"}>
       {chart.kind === "bar" ? (
         <BarChart data={data}>
           {axes}

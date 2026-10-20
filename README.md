@@ -1,6 +1,6 @@
 # xl2
 
-An experiment in an AI-first spreadsheet where the workbook is code. A workbook is one TypeScript module. The app evaluates it and renders sheets, tables, charts, metrics and inputs. Editing a cell rewrites the matching literal in the code, so code stays the single source of truth.
+An experiment in an AI-first spreadsheet where the workbook is code. A workbook is one TypeScript module plus optional CSV data files. Each sheet is an infinite grid: tables, inputs and free cells sit in cells, and charts, metrics and text float over cell ranges. Every edit in the grid rewrites the matching code or CSV text, so the files stay the single source of truth.
 
 ```bash
 pnpm install
@@ -14,30 +14,44 @@ Add your Anthropic API key under Settings (gear icon) to use the assistant. It s
 
 | Package | What it is |
 | --- | --- |
-| `packages/sdk` (`@xl2/sdk`) | The model. Authoring API (`workbook`, `sheet`, `table`, `col`, `query`, `chart`, `metric`, `param`, `text`), the evaluation engine (lazy formulas, cross-table refs, cycle detection, per-cell errors), the runtime (TS → JS with sucrase, run with only `@xl2/sdk` importable), **source edits** (`applyIntent`: UI edits become minimal text splices found via a Babel AST), formatting/input parsing, CSV → table code, and `SDK_REFERENCE`, the docs given to Claude. |
-| `packages/viz` (`@xl2/viz`) | React views on `@alexandernygard/components`: `SheetView`, `SheetTabs`, `DataGrid` (keyboard navigation, type-to-edit, TSV paste, add/delete rows and columns), `ChartView` (recharts), metric, param and markdown blocks. Views never mutate data. They emit `EditIntent`s. |
-| `apps/web` | The in-browser app. Zustand store (files, undo/redo, derived model), CodeMirror editor, chat panel with a streaming Claude tool loop, resizable Data / Split / Code layout. |
+| `packages/sdk` (`@xl2/sdk`) | The model. The authoring API (`workbook`, `sheet` with `cells`/`widths`, `table`, `col`, `query`, `chart`, `metric`, `param`, `text`, `data`), A1 addressing and cell formulas (`=SUM(B2:B9) * growth`, cross-sheet refs, Excel-named functions), the evaluation engine (lazy and memoized, with cycle detection and per-cell errors), the grid layout (`at: "H2:M14"`), **source edits** (`applyEdit`: UI edits become minimal splices to the code or the CSV, found via a Babel AST), and grid logic (`cellAt`, typing/paste/fill/clear → edit intents, with relative references shifted). Also `SDK_REFERENCE`, the docs given to Claude. |
+| `packages/viz` (`@xl2/viz`) | React views on `@alexandernygard/components`. `SheetGrid` is a virtualized, infinite grid with sticky headers, range selection, keyboard navigation, type-to-edit, formula point-mode, fill handle, copy/paste, column resize, context menu, and drag to move or resize blocks. Also sheet tabs, charts (recharts), metric and markdown views. Views never mutate data; they emit `EditIntent`s. |
+| `apps/web` | The in-browser app. A zustand store (bundles, undo/redo), evaluation in a Web Worker, a CodeMirror editor with TypeScript checking in a second worker, a toolbar, a formula bar with a name box, a chat panel with a streaming Claude tool loop, and a Grid / Split / Code layout. |
 
-## How two-way editing works
+## How it fits together
 
 ```
-source (string) ──run()──▶ WorkbookModel ──▶ SheetView
-     ▲                                          │ EditIntent {setCell, addRow, ...}
-     └──────── applyIntent(source, intent) ◀────┘
+code + CSV files ──worker: run()──▶ WorkbookModel (values placed on each sheet's grid) ──▶ SheetGrid
+        ▲                                                                                     │ EditIntent
+        └────────────── applyEdit(bundle, intent): splice one literal / CSV cell ◀────────────┘
 ```
 
-- **Code → data:** every source change (editor, AI, undo) is re-run and re-evaluated synchronously. If it fails, the last good model stays on screen with an error banner and a marker in the editor.
-- **Data → code:** an intent locates the node (`table("sales")` → `rows[2]` → `units`) in the AST and replaces just that literal's text range. Object rows and tuple rows both work, and formatting and comments are kept. Selecting a cell flashes its literal in the code. For computed cells, the formula bar shows the formula's source.
-- **AI:** Claude gets the SDK reference and the current source, and works through four tools: `read_values` (evaluated data), `set_cells` (goes through the same intents), `edit_code` (exact string replace) and `write_code`. After each edit it gets back whether the workbook still evaluates, so it can fix its own errors.
+- **Grid.** Blocks get an `at`. A cell anchors a table, query or param at its natural size. A range sizes a chart, metric or text block. Free cells live in `sheet(name, blocks, { cells: { B3: 0.08, C3: "=B3*2" } })`. Formulas are JS expressions with A1 references, so they can point into tables, params and other sheets.
+- **Typing.** Where a value goes depends on what's under the cell:
+  - Table cell: its literal changes (in code or the CSV).
+  - Row under a table: a new row is appended.
+  - Cell right of a table header: a new column is added.
+  - Formula cell: an `override` is recorded, marked with a corner tick and reversible from the formula bar.
+  - Param: the param's value changes.
+  - Empty cell: a free cell is created.
+- **Moving.** Dragging a chart, metric, text block, table grip or param grip rewrites its `at`. Drops that would overlap another block are refused. Column resizes write `widths`.
+- **Code → grid.** Every change (editor, AI, undo) is evaluated in a worker. If it fails, the last good model stays up with an error banner and a marker in the editor. The editor also type-checks against the real SDK types, with completions and hover.
+- **Grid → code.** Selecting a cell highlights its literal, its CSV cell, its formula or its block in the code pane.
+- **AI.** Claude gets the SDK reference, the code, a summary of the data files, and the selection. It works through four tools:
+  - `read_values`: an overview, a table's rows, or any A1 range.
+  - `set_cells`: by table row and column, or by A1 address.
+  - `edit_code`: exact string replacement in the code or a CSV.
+  - `write_code`: replaces the code, or creates a data file.
 
-## Limitations and what a real version would need
+  After each edit Claude gets back the evaluation result, layout overlaps and type errors.
 
-1. **Only literal data is editable in the grid.** Rows built by code (`Array.from`, query results) and formula cells are read-only, and the grid says so. That's inherent to "code is the truth". A fuller answer is an *overrides* layer (`table(..., { overrides })`) or a data/code split where big data lives in a JSON/CSV file next to the code.
-2. **Code runs unsandboxed on the page.** Workbook code (yours or the AI's) runs with `new Function` in the page's own origin, so it could read the API key in localStorage, and an infinite loop freezes the tab. Next step: evaluate in a Web Worker, or in a sandboxed iframe with a timeout, and only send back the model. That's a contained change because `run()` is pure.
-3. **Scale.** Each change re-parses, re-runs and re-evaluates the whole workbook, and the grid isn't virtualized. That's fine for hundreds of rows but not for 100k. Real use needs incremental evaluation (a dependency graph per cell/column), a virtualized grid, and columnar data stored outside the source text.
-4. **Code → grid selection is one-way.** Clicking a cell highlights its code. Moving the cursor in code doesn't select a cell yet. The `locate` function gives everything needed for that.
-5. **Formulas are JS functions, not cell references.** There's no `=B2*C2` or A1 addressing. Formulas are per-column, plus queries. This is the deliberate "reimagined" part, but users from Excel will miss single-cell formulas and ranges.
-6. **Assistant:** the conversation isn't saved across reloads, and every user message includes the full source, so very large workbooks cost more tokens per turn. It uses `claude-opus-5-5` (switchable to Sonnet/Haiku in Settings) with adaptive thinking and server-side refusal fallbacks (`fallbacks: "default"`).
-7. **Type checking:** the editor highlights TypeScript but doesn't type-check against the SDK types. Monaco or a TS worker would add autocomplete and type errors for both people and Claude.
+## Limitations and next steps
 
-None of this needed a new form factor. A browser-only app works, and the one structural change worth making next is moving evaluation into a worker.
+1. **Rows built by code aren't editable.** Rows generated by code (`Array.from`, queries) stay read-only. Formula cells can be overridden, but only in tables with literal or CSV rows.
+2. **Growing tables don't push neighbours.** A table that gains rows can grow into a block below it. That's reported as an overlap issue, but nothing moves out of the way the way Excel's "insert row" does.
+3. **No incremental re-evaluation.** Each change re-runs the whole workbook in the worker. That's fine for thousands of rows, since data lives in CSV rather than in the parsed code. Far beyond that needs a cell/column dependency graph and incremental evaluation.
+4. **The sandbox is a worker, not a security boundary for hostile code.** Workbook code runs in a Web Worker without network, storage or DOM access and is stopped after 3 s, so it can't read the API key or freeze the page. Parsing for edits (Babel) still runs on the main thread.
+5. **Typed rows are missing.** The checker catches wrong builder names, options and types, but `r.unitz` inside a formula isn't an error, because rows are `Record<string, any>`.
+6. **Cell formulas are JS with A1 sugar, not Excel syntax.** Use `==`, `&&` and `"text"` (`<>` is accepted). There are no array formulas, named ranges or conditional formatting yet.
+7. **Grid gaps.** There is no row insert or delete for free cells, no merged free cells, no per-cell number format inside tables (formats are per column), and no undo grouping across an AI turn.
+8. **Assistant state.** The conversation isn't saved across reloads, and every user message includes the full code.

@@ -56,11 +56,11 @@ export type RunResult =
   | { ok: true; def: WorkbookDef; model: WorkbookModel }
   | { ok: false; error: WorkbookError }
 
-/** Load + evaluate, never throws. */
-export function run(source: string): RunResult {
+/** Load + evaluate, never throws. `files` are the bundle's data files (name -> CSV text). */
+export function run(source: string, files: Record<string, string> = {}): RunResult {
   try {
     const def = load(source)
-    return { ok: true, def, model: evaluate(def) }
+    return { ok: true, def, model: evaluate(def, files) }
   } catch (e: any) {
     return { ok: false, error: e instanceof WorkbookError ? e : new WorkbookError(String(e?.message ?? e)) }
   }

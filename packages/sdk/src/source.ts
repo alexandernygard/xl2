@@ -7,23 +7,48 @@ import type {
   ObjectExpression,
   ObjectProperty,
 } from "@babel/types"
-import type { ColumnKind, Literal } from "./types"
+import { parseAddress } from "./address"
+import { encodeCsvRow, encodeCsvValue, parseCsvRecords } from "./datafile"
+import type { CellStyle, ColumnKind, Format, Literal, Override } from "./types"
 
-// Source edits. The workbook code is the single source of truth; UI edits
-// are expressed as intents and applied here as minimal text splices, so the
-// rest of the file (formatting, comments, formulas) is left untouched.
+// Source edits. The workbook code (plus its CSV data files) is the single
+// source of truth; UI edits are expressed as intents and applied here as
+// minimal text splices, so the rest of the file (formatting, comments,
+// formulas) is left untouched.
+
+/** Workbook code plus data files (name -> CSV text). */
+export interface Bundle {
+  source: string
+  files: Record<string, string>
+}
+
+export type StylePatch = { [K in keyof CellStyle]?: CellStyle[K] | null }
 
 export type EditIntent =
   | { type: "setCell"; table: string; row: number; column: string; value: Literal }
+  /** Type over a formula cell; value undefined clears the override. */
+  | { type: "setOverride"; table: string; row: number; column: string; value: Literal | undefined; note?: string }
   | { type: "setParam"; name: string; value: Literal }
   | { type: "addRow"; table: string; values?: Record<string, Literal> }
   | { type: "deleteRow"; table: string; row: number }
   | { type: "addColumn"; table: string; column: string; kind: ColumnKind; label?: string }
   | { type: "deleteColumn"; table: string; column: string }
+  | { type: "setColumnFormat"; table: string; column: string; format: Format | null }
+  | { type: "setColumnLabel"; table: string; column: string; label: string }
+  | { type: "setTableTitle"; table: string; title: string }
   | { type: "addSheet"; name: string }
+  | { type: "renameSheet"; sheet: string; name: string }
   | { type: "addBlock"; sheet: string; code: string }
+  | { type: "moveBlock"; sheet: string; index: number; at: string }
+  | { type: "deleteBlock"; sheet: string; index: number }
+  /** A free grid cell. Strings starting with "=" are formulas; null clears the value. */
+  | { type: "setFreeCell"; sheet: string; address: string; value: Literal }
+  | { type: "setCellStyle"; sheet: string; address: string; style: StylePatch }
+  | { type: "setWidth"; sheet: string; column: string; width: number | null }
+  | { type: "addDataFile"; file: string; text: string }
 
 export type EditResult = { ok: true; source: string } | { ok: false; error: string }
+export type BundleResult = { ok: true; bundle: Bundle } | { ok: false; error: string }
 
 export type Target =
   | { type: "cell"; table: string; row: number; column: string }
@@ -31,10 +56,14 @@ export type Target =
   | { type: "row"; table: string; row: number }
   | { type: "table"; table: string }
   | { type: "param"; name: string }
+  | { type: "freeCell"; sheet: string; address: string }
+  | { type: "block"; sheet: string; index: number }
 
 export interface Range {
   start: number
   end: number
+  /** Set when the range is in a data file rather than the code. */
+  file?: string
 }
 
 class EditError extends Error {}
@@ -76,9 +105,9 @@ function findCalls(ast: Node, name: string): CallExpression[] {
   return out
 }
 
-function findNamedCall(ast: Node, name: string, first: string): CallExpression {
+function findNamedCall(ast: Node, name: string, first: string, minArgs = 2): CallExpression {
   // definitions take a second argument; this skips reads like ctx.table("x")
-  const hit = findCalls(ast, name).find((c) => stringArg(c, 0) === first && c.arguments.length >= 2)
+  const hit = findCalls(ast, name).find((c) => stringArg(c, 0) === first && c.arguments.length >= minArgs)
   if (!hit) throw new EditError(`Could not find ${name}("${first}") in the code`)
   return hit
 }
@@ -102,12 +131,33 @@ function isFormulaColumn(value: Node): boolean {
   )
 }
 
+/** The JS value of a literal node, or undefined if it isn't a plain literal. */
+function literalValue(n: Node | null | undefined): Literal | undefined {
+  if (!n) return undefined
+  switch (n.type) {
+    case "StringLiteral":
+    case "NumericLiteral":
+    case "BooleanLiteral":
+      return n.value
+    case "NullLiteral":
+      return null
+    case "UnaryExpression":
+      if (n.operator === "-" && n.argument.type === "NumericLiteral") return -n.argument.value
+      return undefined
+    case "TemplateLiteral":
+      return n.expressions.length === 0 ? (n.quasis[0].value.cooked ?? undefined) : undefined
+    default:
+      return undefined
+  }
+}
+
 interface TableNodes {
   call: CallExpression
   def: ObjectExpression
   columns: ObjectExpression
   rows?: ArrayExpression
   rowsProp?: ObjectProperty
+  dataFile?: string
   dataColumns: string[]
 }
 
@@ -123,16 +173,19 @@ function tableNodes(ast: Node, name: string): TableNodes {
     .map((p) => propKey(p)!)
   const rowsProp = getProp(def, "rows")
   let rows: ArrayExpression | undefined
+  let dataFile: string | undefined
   if (rowsProp) {
-    if (rowsProp.value.type !== "ArrayExpression")
+    const v = rowsProp.value
+    if (v.type === "CallExpression" && calleeName(v) === "data" && stringArg(v, 0)) dataFile = stringArg(v, 0)
+    else if (v.type !== "ArrayExpression")
       throw new EditError(`Rows of "${name}" are generated by code, so they can't be edited in the grid`)
-    rows = rowsProp.value
+    else rows = v
   }
-  return { call, def, columns, rows, rowsProp, dataColumns }
+  return { call, def, columns, rows, rowsProp, dataFile, dataColumns }
 }
 
 export function literalCode(v: Literal): string {
-  if (v === null) return "null"
+  if (v === null || v === undefined) return "null"
   if (typeof v === "number") return Number.isFinite(v) ? String(v) : "null"
   return JSON.stringify(v)
 }
@@ -153,6 +206,10 @@ function apply(source: string, s: Splice) {
   return source.slice(0, s.start) + s.text + source.slice(s.end)
 }
 
+function applyAll(source: string, splices: Splice[]) {
+  return [...splices].sort((a, b) => b.start - a.start).reduce(apply, source)
+}
+
 function lineIndent(source: string, pos: number) {
   const lineStart = source.lastIndexOf("\n", pos - 1) + 1
   const m = /^[ \t]*/.exec(source.slice(lineStart))
@@ -167,6 +224,13 @@ function isMultiline(source: string, node: Node) {
 function appendItem(source: string, container: Node, items: Node[], text: string): Splice {
   const closing = container.end! - 1
   if (items.length === 0) {
+    const inner = source.slice(container.start! + 1, closing)
+    // keep small things on one line: {} -> { a: 1 }
+    if (!inner.includes("\n") && text.length < 60 && !text.includes("\n")) {
+      const open = source[container.start!] === "{" ? "{ " : "["
+      const close = source[container.start!] === "{" ? " }" : "]"
+      return { start: container.start!, end: container.end!, text: `${open}${text}${close}` }
+    }
     const indent = lineIndent(source, container.start!)
     return { start: container.start! + 1, end: closing, text: `\n${indent}  ${text},\n${indent}` }
   }
@@ -191,16 +255,208 @@ function removeItem(source: string, items: Node[], i: number): Splice {
   const item = items[i]
   if (i < items.length - 1) return { start: item.start!, end: items[i + 1].start!, text: "" }
   if (i > 0) return { start: items[i - 1].end!, end: item.end!, text: "" }
-  // only item: also drop a trailing comma
+  // only item: also drop a trailing comma and the line it was on
   const after = source.slice(item.end!)
   const m = /^\s*,/.exec(after)
   return { start: item.start!, end: item.end! + (m ? m[0].length : 0), text: "" }
 }
 
-// --- intents ---------------------------------------------------------------
+/** Set, add or (code undefined) remove a property of an object literal. */
+function setProp(source: string, obj: ObjectExpression, key: string, code: string | undefined): Splice | null {
+  const props = obj.properties as Node[]
+  const i = props.findIndex((p) => p.type === "ObjectProperty" && propKey(p as ObjectProperty) === key)
+  if (code === undefined) return i >= 0 ? removeItem(source, props, i) : null
+  if (i >= 0) {
+    const v = (props[i] as ObjectProperty).value
+    return { start: v.start!, end: v.end!, text: code }
+  }
+  return appendItem(source, obj, props, `${identOrString(key)}: ${code}`)
+}
 
-function setCell(source: string, ast: Node, t: string, row: number, column: string, value: Literal): Splice {
+/** Set a key in the options object at argument `index` of a call, creating the object if needed. */
+function setCallOption(source: string, call: CallExpression, index: number, key: string, code: string | undefined): Splice | null {
+  const arg = call.arguments[index]
+  if (arg?.type === "ObjectExpression") return setProp(source, arg, key, code)
+  if (arg) throw new EditError("The options argument isn't an object literal")
+  if (code === undefined) return null
+  if (call.arguments.length !== index) throw new EditError("Can't add options to this call")
+  const obj = `{ ${identOrString(key)}: ${code} }`
+  if (index === 0) {
+    const close = call.end! - 1
+    return { start: close, end: close, text: obj }
+  }
+  const last = call.arguments[index - 1]
+  return { start: last.end!, end: last.end!, text: `, ${obj}` }
+}
+
+// --- sheets and blocks -----------------------------------------------------
+
+function sheetCall(ast: Node, name: string): CallExpression {
+  return findNamedCall(ast, "sheet", name, 1)
+}
+
+function sheetBlocks(call: CallExpression, name: string): ArrayExpression {
+  const blocks = call.arguments[1]
+  if (blocks?.type !== "ArrayExpression") throw new EditError(`sheet("${name}") blocks must be an array literal`)
+  return blocks
+}
+
+const BLOCK_OPTIONS_ARG: Record<string, number> = { table: 1, query: 2, metric: 2, param: 2, text: 1 }
+
+function blockCall(ast: Node, sheet: string, index: number): { call: CallExpression; items: Node[]; optionsArg: number } {
+  const items = sheetBlocks(sheetCall(ast, sheet), sheet).elements.filter(Boolean) as Node[]
+  const call = items[index]
+  if (!call) throw new EditError(`Sheet "${sheet}" has no block ${index + 1}`)
+  if (call.type !== "CallExpression") throw new EditError(`Block ${index + 1} of "${sheet}" isn't written inline, so it can't be moved here`)
+  const name = calleeName(call) ?? ""
+  return { call, items, optionsArg: BLOCK_OPTIONS_ARG[name] ?? 1 }
+}
+
+/** The sheet's options object (third argument), and how to create a key in it if missing. */
+function sheetOption(source: string, ast: Node, sheet: string, key: string): { obj?: ObjectExpression; create: (code: string) => Splice } {
+  const call = sheetCall(ast, sheet)
+  const opts = call.arguments[2]
+  if (opts && opts.type !== "ObjectExpression") throw new EditError(`sheet("${sheet}") options must be an object literal`)
+  const value = opts ? getProp(opts, key)?.value : undefined
+  if (value && value.type !== "ObjectExpression") throw new EditError(`sheet("${sheet}") ${key} must be an object literal`)
+  return {
+    obj: value as ObjectExpression | undefined,
+    create(code) {
+      if (opts) return appendItem(source, opts, opts.properties as Node[], `${key}: ${code}`)
+      const last = call.arguments[call.arguments.length - 1]
+      const blocks = call.arguments.length === 1 ? ", []" : ""
+      return { start: last.end!, end: last.end!, text: `${blocks}, { ${key}: ${code} }` }
+    },
+  }
+}
+
+function cellKey(obj: ObjectExpression, address: string): ObjectProperty | undefined {
+  const want = address.toUpperCase()
+  return obj.properties.find((p): p is ObjectProperty => p.type === "ObjectProperty" && propKey(p)?.toUpperCase() === want)
+}
+
+function setFreeCell(source: string, ast: Node, sheet: string, addr: string, value: Literal): Splice | null {
+  const a = parseAddress(addr)
+  if (!a) throw new EditError(`"${addr}" is not a cell address`)
+  const key = addr.toUpperCase().replace(/\$/g, "")
+  const { obj, create } = sheetOption(source, ast, sheet, "cells")
+  const code = literalCode(value)
+  if (!obj) return value === null ? null : create(`{ ${key}: ${code} }`)
+  const prop = cellKey(obj, key)
+  if (prop?.value.type === "ObjectExpression") {
+    // styled cell: keep the style, change the value
+    return setProp(source, prop.value, "value", code)
+  }
+  if (value === null) return prop ? setProp(source, obj, propKey(prop)!, undefined) : null
+  if (prop) return { start: prop.value.start!, end: prop.value.end!, text: code }
+  return appendItem(source, obj, obj.properties as Node[], `${key}: ${code}`)
+}
+
+function styleCode(style: StylePatch): string[] {
+  return Object.entries(style)
+    .filter(([, v]) => v !== null && v !== undefined)
+    .map(([k, v]) => `${k}: ${literalCode(v as Literal)}`)
+}
+
+function setCellStyle(source: string, ast: Node, sheet: string, addr: string, style: StylePatch): Splice[] {
+  if (!parseAddress(addr)) throw new EditError(`"${addr}" is not a cell address`)
+  const key = addr.toUpperCase().replace(/\$/g, "")
+  const { obj, create } = sheetOption(source, ast, sheet, "cells")
+  const fresh = styleCode(style)
+  if (!obj) return fresh.length ? [create(`{ ${key}: { value: null, ${fresh.join(", ")} } }`)] : []
+  const prop = cellKey(obj, key)
+  if (!prop) return fresh.length ? [appendItem(source, obj, obj.properties as Node[], `${key}: { value: null, ${fresh.join(", ")} }`)] : []
+  if (prop.value.type === "ObjectExpression") {
+    const spec = prop.value
+    const splices: Splice[] = []
+    for (const [k, v] of Object.entries(style)) {
+      const s = setProp(source, spec, k, v === null || v === undefined ? undefined : literalCode(v as Literal))
+      if (s) splices.push(s)
+    }
+    // appends to the same object collide; fall back to rewriting the whole spec
+    if (splices.filter((s) => s.start === s.end).length > 1 || overlapping(splices)) {
+      const cur: Record<string, string> = {}
+      for (const p of spec.properties) if (p.type === "ObjectProperty") cur[propKey(p)!] = source.slice(p.value.start!, p.value.end!)
+      for (const [k, v] of Object.entries(style)) {
+        if (v === null || v === undefined) delete cur[k]
+        else cur[k] = literalCode(v as Literal)
+      }
+      const body = Object.entries(cur).map(([k, v]) => `${k}: ${v}`)
+      return [{ start: spec.start!, end: spec.end!, text: `{ ${body.join(", ")} }` }]
+    }
+    return splices
+  }
+  if (!fresh.length) return []
+  const value = source.slice(prop.value.start!, prop.value.end!)
+  return [{ start: prop.value.start!, end: prop.value.end!, text: `{ value: ${value}, ${fresh.join(", ")} }` }]
+}
+
+function overlapping(splices: Splice[]) {
+  const s = [...splices].sort((a, b) => a.start - b.start)
+  for (let i = 1; i < s.length; i++) if (s[i].start < s[i - 1].end || s[i].start === s[i - 1].start) return true
+  return false
+}
+
+// --- overrides ---------------------------------------------------------------
+
+function readOverrides(source: string, def: ObjectExpression): Override[] | null {
+  const prop = getProp(def, "overrides")
+  if (!prop) return []
+  if (prop.value.type !== "ArrayExpression") return null
+  const out: Override[] = []
+  for (const el of prop.value.elements) {
+    if (el?.type !== "ObjectExpression") return null
+    const row = literalValue(getProp(el, "row")?.value)
+    const column = literalValue(getProp(el, "column")?.value)
+    const valueNode = getProp(el, "value")?.value
+    const value = literalValue(valueNode)
+    const note = literalValue(getProp(el, "note")?.value)
+    if (typeof row !== "number" || typeof column !== "string" || value === undefined) return null
+    out.push({ row, column, value, ...(typeof note === "string" ? { note } : {}) })
+  }
+  void source
+  return out
+}
+
+function overridesCode(list: Override[], indent: string): string {
+  const item = (o: Override) =>
+    `{ row: ${o.row}, column: ${JSON.stringify(o.column)}, value: ${literalCode(o.value)}${o.note ? `, note: ${JSON.stringify(o.note)}` : ""} }`
+  if (list.length <= 1) return `[${list.map(item).join("")}]`
+  return `[\n${list.map((o) => `${indent}  ${item(o)},`).join("\n")}\n${indent}]`
+}
+
+function writeOverrides(source: string, nodes: TableNodes, list: Override[]): Splice | null {
+  const prop = getProp(nodes.def, "overrides")
+  if (!list.length) return prop ? setProp(source, nodes.def, "overrides", undefined) : null
+  const indent = prop ? lineIndent(source, prop.start!) : lineIndent(source, (nodes.def.properties[0] ?? nodes.def).start!)
+  return setProp(source, nodes.def, "overrides", overridesCode(list, indent))
+}
+
+function setOverride(source: string, ast: Node, t: string, row: number, column: string, value: Literal | undefined, note?: string): Splice | null {
   const nodes = tableNodes(ast, t)
+  const colProp = getProp(nodes.columns, column)
+  if (!colProp) throw new EditError(`Unknown column "${column}" in "${t}"`)
+  if (!isFormulaColumn(colProp.value)) throw new EditError(`"${column}" isn't a formula column; set the cell instead`)
+  const list = readOverrides(source, nodes.def)
+  if (!list) throw new EditError(`overrides of "${t}" must be literal { row, column, value } objects`)
+  const rest = list.filter((o) => !(o.row === row && o.column === column))
+  if (value !== undefined) rest.push({ row, column, value, ...(note ? { note } : {}) })
+  rest.sort((a, b) => a.row - b.row || a.column.localeCompare(b.column))
+  return writeOverrides(source, nodes, rest)
+}
+
+/** Deleting a row shifts the overrides below it. */
+function shiftOverrides(source: string, nodes: TableNodes, deleted: number): Splice | null {
+  const list = readOverrides(source, nodes.def)
+  if (!list?.length) return null
+  if (!list.some((o) => o.row >= deleted)) return null
+  const next = list.filter((o) => o.row !== deleted).map((o) => (o.row > deleted ? { ...o, row: o.row - 1 } : o))
+  return writeOverrides(source, nodes, next)
+}
+
+// --- table intents (code rows) -------------------------------------------------
+
+function setCell(source: string, nodes: TableNodes, t: string, row: number, column: string, value: Literal): Splice {
   const colProp = getProp(nodes.columns, column)
   if (!colProp) throw new EditError(`Unknown column "${column}" in "${t}"`)
   if (isFormulaColumn(colProp.value)) throw new EditError(`"${column}" is a formula column; edit its code instead`)
@@ -224,11 +480,9 @@ function setCell(source: string, ast: Node, t: string, row: number, column: stri
   throw new EditError(`Row ${row + 1} of "${t}" is computed by code, so it can't be edited in the grid`)
 }
 
-function addRow(source: string, ast: Node, t: string, values: Record<string, Literal> = {}): Splice {
-  const nodes = tableNodes(ast, t)
+function addRow(source: string, nodes: TableNodes, values: Record<string, Literal> = {}): Splice {
   const cols = nodes.dataColumns
   if (!nodes.rows) {
-    // no rows property yet: add one
     const obj = `{ ${cols.map((c) => `${identOrString(c)}: ${literalCode(values[c] ?? null)}`).join(", ")} }`
     return appendItem(source, nodes.def, nodes.def.properties, `rows: [${obj}]`)
   }
@@ -240,8 +494,7 @@ function addRow(source: string, ast: Node, t: string, values: Record<string, Lit
   return appendItem(source, nodes.rows, els, text)
 }
 
-function deleteRow(source: string, ast: Node, t: string, row: number): Splice {
-  const nodes = tableNodes(ast, t)
+function deleteRow(source: string, nodes: TableNodes, t: string, row: number): Splice {
   const els = (nodes.rows?.elements ?? []).filter(Boolean) as Node[]
   if (!els[row]) throw new EditError(`Row ${row + 1} of "${t}" is not a literal in the code`)
   return removeItem(source, els, row)
@@ -259,22 +512,18 @@ function columnBuilder(kind: ColumnKind, label?: string) {
   }
 }
 
-function addColumn(source: string, ast: Node, t: string, column: string, kind: ColumnKind, label?: string): Splice {
-  const nodes = tableNodes(ast, t)
+function addColumn(source: string, nodes: TableNodes, column: string, kind: ColumnKind, label?: string): Splice {
   if (getProp(nodes.columns, column)) throw new EditError(`Column "${column}" already exists`)
   return appendItem(source, nodes.columns, nodes.columns.properties, `${identOrString(column)}: ${columnBuilder(kind, label)}`)
 }
 
-function deleteColumn(source: string, ast: Node, t: string, column: string): string {
-  const nodes = tableNodes(ast, t)
+function deleteColumn(source: string, nodes: TableNodes, column: string): string {
   const props = nodes.columns.properties as Node[]
   const i = props.findIndex((p) => p.type === "ObjectProperty" && propKey(p as ObjectProperty) === column)
   if (i < 0) throw new EditError(`Unknown column "${column}"`)
-  const isData = nodes.dataColumns.includes(column)
   const dataIdx = nodes.dataColumns.indexOf(column)
-  // collect all splices, apply from the end so offsets stay valid
   const splices: Splice[] = [removeItem(source, props, i)]
-  if (isData && nodes.rows) {
+  if (dataIdx >= 0 && nodes.rows) {
     for (const el of nodes.rows.elements) {
       if (el?.type === "ObjectExpression") {
         const j = el.properties.findIndex((p) => p.type === "ObjectProperty" && propKey(p) === column)
@@ -285,80 +534,265 @@ function deleteColumn(source: string, ast: Node, t: string, column: string): str
       }
     }
   }
-  splices.sort((a, b) => b.start - a.start)
-  return splices.reduce(apply, source)
+  return applyAll(source, splices)
 }
 
-function setParam(ast: Node, name: string, value: Literal): Splice {
-  const call = findNamedCall(ast, "param", name)
-  const arg = call.arguments[1]
-  if (!arg) throw new EditError(`param("${name}") has no value`)
-  return { start: arg.start!, end: arg.end!, text: literalCode(value) }
+function setColumnFormat(source: string, nodes: TableNodes, column: string, format: Format | null): Splice | null {
+  const p = getProp(nodes.columns, column)
+  if (!p) throw new EditError(`Unknown column "${column}"`)
+  if (p.value.type !== "CallExpression") throw new EditError(`Column "${column}" isn't a col.*() call`)
+  const kind = calleeName(p.value)
+  const optIndex = kind === "select" || kind === "formula" ? 1 : 0
+  return setCallOption(source, p.value, optIndex, "format", format === null ? undefined : JSON.stringify(format))
 }
 
-function addSheet(source: string, ast: Node, name: string): Splice {
-  const wb = findCalls(ast, "workbook")[0]
-  const sheets = wb?.arguments[1]
-  if (sheets?.type !== "ArrayExpression") throw new EditError("Could not find the workbook's sheet list")
-  const existing = (sheets.elements.filter(Boolean) as Node[])
-  return appendItem(source, sheets, existing, `sheet(${JSON.stringify(name)}, [])`)
+// --- table intents (data files) ------------------------------------------------
+
+function csvHeader(text: string): string[] {
+  const [h] = parseCsvRecords(text)
+  return h ? h.cells.map((c) => c.text.trim()) : []
 }
 
-function addBlock(source: string, ast: Node, sheetName: string, code: string): Splice {
-  const call = findNamedCall(ast, "sheet", sheetName)
-  const blocks = call.arguments[1]
-  if (blocks?.type !== "ArrayExpression") throw new EditError(`sheet("${sheetName}") blocks must be an array literal`)
-  return appendItem(source, blocks, blocks.elements.filter(Boolean) as Node[], code)
+function rewriteCsv(text: string, fn: (rows: string[][]) => string[][]): string {
+  const rows = parseCsvRecords(text).map((r) => r.cells.map((c) => c.text))
+  return fn(rows).map((r) => r.map((c) => encodeCsvValue(c === "" ? null : c)).join(",")).join("\n") + "\n"
 }
 
-/** Apply a UI edit to workbook source. */
-export function applyIntent(source: string, intent: EditIntent): EditResult {
-  try {
-    const ast = parseSource(source)
-    switch (intent.type) {
-      case "setCell":
-        return { ok: true, source: apply(source, setCell(source, ast, intent.table, intent.row, intent.column, intent.value)) }
-      case "setParam":
-        return { ok: true, source: apply(source, setParam(ast, intent.name, intent.value)) }
-      case "addRow":
-        return { ok: true, source: apply(source, addRow(source, ast, intent.table, intent.values)) }
-      case "deleteRow":
-        return { ok: true, source: apply(source, deleteRow(source, ast, intent.table, intent.row)) }
-      case "addColumn":
-        return {
-          ok: true,
-          source: apply(source, addColumn(source, ast, intent.table, intent.column, intent.kind, intent.label)),
-        }
-      case "deleteColumn":
-        return { ok: true, source: deleteColumn(source, ast, intent.table, intent.column) }
-      case "addSheet":
-        return { ok: true, source: apply(source, addSheet(source, ast, intent.name)) }
-      case "addBlock":
-        return { ok: true, source: apply(source, addBlock(source, ast, intent.sheet, intent.code)) }
+function csvSetCell(text: string, columns: string[], row: number, column: string, value: Literal): string {
+  let header = csvHeader(text)
+  if (!header.length) {
+    text = encodeCsvRow(columns) + "\n"
+    header = columns
+  }
+  if (!header.includes(column)) {
+    text = rewriteCsv(text, (rows) => rows.map((r, i) => [...r, ...Array(Math.max(0, header.length - r.length)).fill(""), i === 0 ? column : ""]))
+    header = [...header, column]
+  }
+  const recs = parseCsvRecords(text)
+  const rec = recs[row + 1]
+  if (!rec) throw new EditError(`Row ${row + 1} doesn't exist in the data file`)
+  const ci = header.indexOf(column)
+  const code = encodeCsvValue(value)
+  const cell = rec.cells[ci]
+  if (cell) return text.slice(0, cell.start) + code + text.slice(cell.end)
+  return text.slice(0, rec.end) + ",".repeat(ci - rec.cells.length + 1) + code + text.slice(rec.end)
+}
+
+function csvAddRow(text: string, columns: string[], values: Record<string, Literal> = {}): string {
+  let header = csvHeader(text)
+  if (!header.length) {
+    header = columns
+    text = encodeCsvRow(columns) + "\n"
+  }
+  const line = encodeCsvRow(header.map((k) => values[k] ?? null))
+  const sep = text === "" || text.endsWith("\n") ? "" : "\n"
+  return `${text}${sep}${line}\n`
+}
+
+function csvDeleteRow(text: string, row: number): string {
+  const rec = parseCsvRecords(text)[row + 1]
+  if (!rec) throw new EditError(`Row ${row + 1} doesn't exist in the data file`)
+  return text.slice(0, rec.start) + text.slice(rec.next)
+}
+
+function csvAddColumn(text: string, column: string): string {
+  if (!text.trim()) return text
+  return rewriteCsv(text, (rows) => {
+    const w = rows[0]?.length ?? 0
+    return rows.map((r, i) => [...r, ...Array(Math.max(0, w - r.length)).fill(""), i === 0 ? column : ""])
+  })
+}
+
+function csvDeleteColumn(text: string, column: string): string {
+  const ci = csvHeader(text).indexOf(column)
+  if (ci < 0) return text
+  return rewriteCsv(text, (rows) => rows.map((r) => r.filter((_, i) => i !== ci)))
+}
+
+function dataFileOf(bundle: Bundle, nodes: TableNodes): string {
+  const text = bundle.files[nodes.dataFile!]
+  if (text === undefined) throw new EditError(`Data file "${nodes.dataFile}" is missing`)
+  return text
+}
+
+// --- dispatch --------------------------------------------------------------------
+
+function withFile(bundle: Bundle, file: string, text: string, source = bundle.source): Bundle {
+  return { source, files: { ...bundle.files, [file]: text } }
+}
+
+function editBundle(bundle: Bundle, intent: EditIntent): Bundle {
+  const source = bundle.source
+  const ast = parseSource(source)
+  const code = (s: Splice | Splice[] | null) =>
+    ({ ...bundle, source: s === null ? source : Array.isArray(s) ? applyAll(source, s) : apply(source, s) })
+
+  switch (intent.type) {
+    case "setCell": {
+      const nodes = tableNodes(ast, intent.table)
+      if (nodes.dataFile) {
+        const colProp = getProp(nodes.columns, intent.column)
+        if (!colProp) throw new EditError(`Unknown column "${intent.column}" in "${intent.table}"`)
+        if (isFormulaColumn(colProp.value)) throw new EditError(`"${intent.column}" is a formula column; edit its code instead`)
+        return withFile(bundle, nodes.dataFile, csvSetCell(dataFileOf(bundle, nodes), nodes.dataColumns, intent.row, intent.column, intent.value))
+      }
+      return code(setCell(source, nodes, intent.table, intent.row, intent.column, intent.value))
     }
+    case "setOverride":
+      return code(setOverride(source, ast, intent.table, intent.row, intent.column, intent.value, intent.note))
+    case "setParam": {
+      const call = findNamedCall(ast, "param", intent.name)
+      const arg = call.arguments[1]
+      return code({ start: arg.start!, end: arg.end!, text: literalCode(intent.value) })
+    }
+    case "addRow": {
+      const nodes = tableNodes(ast, intent.table)
+      if (nodes.dataFile) return withFile(bundle, nodes.dataFile, csvAddRow(dataFileOf(bundle, nodes), nodes.dataColumns, intent.values))
+      return code(addRow(source, nodes, intent.values))
+    }
+    case "deleteRow": {
+      const nodes = tableNodes(ast, intent.table)
+      const shift = shiftOverrides(source, nodes, intent.row)
+      if (nodes.dataFile) {
+        const next = csvDeleteRow(dataFileOf(bundle, nodes), intent.row)
+        return withFile(bundle, nodes.dataFile, next, shift ? apply(source, shift) : source)
+      }
+      return code([deleteRow(source, nodes, intent.table, intent.row), ...(shift ? [shift] : [])])
+    }
+    case "addColumn": {
+      const nodes = tableNodes(ast, intent.table)
+      const next = apply(source, addColumn(source, nodes, intent.column, intent.kind, intent.label))
+      if (nodes.dataFile && intent.kind !== "formula")
+        return withFile(bundle, nodes.dataFile, csvAddColumn(dataFileOf(bundle, nodes), intent.column), next)
+      return { ...bundle, source: next }
+    }
+    case "deleteColumn": {
+      const nodes = tableNodes(ast, intent.table)
+      const next = deleteColumn(source, nodes, intent.column)
+      if (nodes.dataFile) return withFile(bundle, nodes.dataFile, csvDeleteColumn(dataFileOf(bundle, nodes), intent.column), next)
+      return { ...bundle, source: next }
+    }
+    case "setColumnFormat":
+      return code(setColumnFormat(source, tableNodes(ast, intent.table), intent.column, intent.format))
+    case "setColumnLabel": {
+      const p = getProp(tableNodes(ast, intent.table).columns, intent.column)
+      if (!p) throw new EditError(`Unknown column "${intent.column}"`)
+      if (p.value.type !== "CallExpression") throw new EditError(`Column "${intent.column}" isn't a col.*() call`)
+      const kind = calleeName(p.value)
+      return code(setCallOption(source, p.value, kind === "select" || kind === "formula" ? 1 : 0, "label", JSON.stringify(intent.label)))
+    }
+    case "setTableTitle":
+      return code(setProp(source, tableNodes(ast, intent.table).def, "title", JSON.stringify(intent.title)))
+    case "addSheet": {
+      const wb = findCalls(ast, "workbook")[0]
+      const sheets = wb?.arguments[1]
+      if (sheets?.type !== "ArrayExpression") throw new EditError("Could not find the workbook's sheet list")
+      return code(appendItem(source, sheets, sheets.elements.filter(Boolean) as Node[], `sheet(${JSON.stringify(intent.name)}, [])`))
+    }
+    case "renameSheet": {
+      const call = sheetCall(ast, intent.sheet)
+      const arg = call.arguments[0]
+      return code({ start: arg.start!, end: arg.end!, text: JSON.stringify(intent.name) })
+    }
+    case "addBlock": {
+      const blocks = sheetBlocks(sheetCall(ast, intent.sheet), intent.sheet)
+      const splices = [appendItem(source, blocks, blocks.elements.filter(Boolean) as Node[], intent.code)]
+      const imp = missingImports(source, ast, intent.code)
+      if (imp) splices.push(imp)
+      return code(splices)
+    }
+    case "moveBlock": {
+      const { call, optionsArg } = blockCall(ast, intent.sheet, intent.index)
+      return code(setCallOption(source, call, optionsArg, "at", JSON.stringify(intent.at)))
+    }
+    case "deleteBlock": {
+      const { items } = blockCall(ast, intent.sheet, intent.index)
+      return code(removeItem(source, items, intent.index))
+    }
+    case "setFreeCell":
+      return code(setFreeCell(source, ast, intent.sheet, intent.address, intent.value))
+    case "setCellStyle":
+      return code(setCellStyle(source, ast, intent.sheet, intent.address, intent.style))
+    case "setWidth": {
+      const col = intent.column.toUpperCase()
+      const { obj, create } = sheetOption(source, ast, intent.sheet, "widths")
+      const width = intent.width === null ? undefined : String(Math.round(intent.width))
+      if (!obj) return code(width === undefined ? null : create(`{ ${col}: ${width} }`))
+      return code(setProp(source, obj, col, width))
+    }
+    case "addDataFile":
+      if (intent.file in bundle.files) throw new EditError(`A data file named "${intent.file}" already exists`)
+      return withFile(bundle, intent.file, intent.text)
+  }
+}
+
+const BUILDERS = ["table", "query", "col", "chart", "metric", "param", "text", "data", "sheet"]
+
+/** Add builder names that `code` uses to the file's `import { ... } from "@xl2/sdk"`. */
+function missingImports(source: string, ast: Node, code: string): Splice | null {
+  const used = BUILDERS.filter((n) => new RegExp(`(^|[^.\\w$])${n}\\s*[.(]`).test(code))
+  let decl: any
+  walk(ast, (n) => {
+    if (!decl && n.type === "ImportDeclaration" && (n.source.value === "@xl2/sdk" || n.source.value === "xl2")) decl = n
+  })
+  if (!decl) return null
+  const have = new Set(decl.specifiers.filter((s: any) => s.type === "ImportSpecifier").map((s: any) => s.local.name))
+  const add = used.filter((n) => !have.has(n))
+  if (!add.length) return null
+  const named = decl.specifiers.filter((s: any) => s.type === "ImportSpecifier")
+  if (!named.length) return null
+  const last = named[named.length - 1]
+  return { start: last.end, end: last.end, text: `, ${add.join(", ")}` }
+}
+
+/** Apply a UI edit to a workbook bundle (code plus data files). */
+export function applyEdit(bundle: Bundle, intent: EditIntent): BundleResult {
+  try {
+    return { ok: true, bundle: editBundle(bundle, intent) }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
 }
 
-/** Apply several intents in order; stops at the first failure. */
-export function applyIntents(source: string, intents: EditIntent[]): EditResult {
-  let cur = source
+/** Apply several edits in order; stops at the first failure. */
+export function applyEdits(bundle: Bundle, intents: EditIntent[]): BundleResult {
+  let cur = bundle
   for (const i of intents) {
-    const r = applyIntent(cur, i)
+    const r = applyEdit(cur, i)
     if (!r.ok) return r
-    cur = r.source
+    cur = r.bundle
   }
-  return { ok: true, source: cur }
+  return { ok: true, bundle: cur }
 }
 
-/** Where a thing lives in the source, for highlighting and formula display. */
-export function locate(source: string, target: Target): Range | null {
+/** Apply a UI edit to workbook code alone (no data files). */
+export function applyIntent(source: string, intent: EditIntent): EditResult {
+  const r = applyEdit({ source, files: {} }, intent)
+  return r.ok ? { ok: true, source: r.bundle.source } : r
+}
+
+/** Apply several intents to code alone; stops at the first failure. */
+export function applyIntents(source: string, intents: EditIntent[]): EditResult {
+  const r = applyEdits({ source, files: {} }, intents)
+  return r.ok ? { ok: true, source: r.bundle.source } : r
+}
+
+/** Where a thing lives in the code (or a data file), for highlighting and formula display. */
+export function locate(source: string, target: Target, files: Record<string, string> = {}): Range | null {
   try {
     const ast = parseSource(source)
     if (target.type === "param") {
       const c = findNamedCall(ast, "param", target.name)
       return { start: c.start!, end: c.end! }
+    }
+    if (target.type === "block") {
+      const { call } = blockCall(ast, target.sheet, target.index)
+      return { start: call.start!, end: call.end! }
+    }
+    if (target.type === "freeCell") {
+      const { obj } = sheetOption(source, ast, target.sheet, "cells")
+      const p = obj && cellKey(obj, target.address)
+      return p ? { start: p.start!, end: p.end! } : null
     }
     const nodes = tableNodes(ast, target.table)
     if (target.type === "table") return { start: nodes.call.start!, end: nodes.call.end! }
@@ -366,10 +800,32 @@ export function locate(source: string, target: Target): Range | null {
       const p = getProp(nodes.columns, target.column)
       return p ? { start: p.start!, end: p.end! } : null
     }
+    const colProp = getProp(nodes.columns, target.type === "cell" ? target.column : "")
+    if (target.type === "cell" && colProp && isFormulaColumn(colProp.value)) {
+      const ov = getProp(nodes.def, "overrides")
+      if (ov?.value.type === "ArrayExpression") {
+        const hit = ov.value.elements.find(
+          (el) =>
+            el?.type === "ObjectExpression" &&
+            literalValue(getProp(el, "row")?.value) === target.row &&
+            literalValue(getProp(el, "column")?.value) === target.column,
+        )
+        if (hit) return { start: hit.start!, end: hit.end! }
+      }
+      return { start: colProp.start!, end: colProp.end! }
+    }
+    if (nodes.dataFile) {
+      const text = files[nodes.dataFile]
+      if (text === undefined) return null
+      const recs = parseCsvRecords(text)
+      const rec = recs[target.row + 1]
+      if (!rec) return null
+      if (target.type === "row") return { start: rec.start, end: rec.end, file: nodes.dataFile }
+      const cell = rec.cells[csvHeader(text).indexOf(target.column)]
+      return cell ? { start: cell.start, end: cell.end, file: nodes.dataFile } : { start: rec.start, end: rec.end, file: nodes.dataFile }
+    }
     const el = nodes.rows?.elements[target.row]
     if (target.type === "row") return el ? { start: el.start!, end: el.end! } : null
-    const colProp = getProp(nodes.columns, target.column)
-    if (colProp && isFormulaColumn(colProp.value)) return { start: colProp.start!, end: colProp.end! }
     if (!el) return null
     if (el.type === "ObjectExpression") {
       const p = getProp(el, target.column)
@@ -401,7 +857,7 @@ export function formulaSource(source: string, tableName: string, column: string)
 /** Exact-match string replacement, for AI edits. The old text must be unique. */
 export function replaceOnce(source: string, oldText: string, newText: string): EditResult {
   const first = source.indexOf(oldText)
-  if (first < 0) return { ok: false, error: "old_string not found in the source" }
+  if (first < 0) return { ok: false, error: "old_string not found" }
   if (source.indexOf(oldText, first + 1) >= 0)
     return { ok: false, error: "old_string appears more than once; include more surrounding context" }
   return { ok: true, source: source.slice(0, first) + newText + source.slice(first + oldText.length) }

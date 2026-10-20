@@ -58,6 +58,10 @@ export interface EvalContext {
   table(name: string): Rows
   /** Current value of a param. */
   param(name: string): any
+  /** Value of a grid cell: "B3" (on the block's sheet) or "Sheet 2!B3". */
+  cell(ref: string): any
+  /** Values of a grid range, row by row, flattened: "B2:B9". */
+  range(ref: string): any[]
 }
 
 /** Query helper over a list of records. Implemented in rows.ts. */
@@ -86,8 +90,28 @@ export interface Rows {
 }
 
 export interface BlockBase {
-  /** Grid columns this block spans, out of 4. */
-  span?: 1 | 2 | 3 | 4
+  /**
+   * Where the block sits on the sheet grid. A cell ("B4") anchors the top-left corner
+   * and uses the block's natural size; a range ("H2:M14") also sets the size.
+   * Blocks without `at` are stacked down column A.
+   */
+  at?: string
+  /** @deprecated Ignored. Use `at`. */
+  span?: number
+}
+
+/** Rows stored in a CSV data file next to the workbook code. */
+export interface DataRef {
+  type: "data"
+  file: string
+}
+
+/** A hand-typed value that replaces one computed cell. */
+export interface Override {
+  row: number
+  column: string
+  value: Literal
+  note?: string
 }
 
 export interface TableDef extends BlockBase {
@@ -95,10 +119,12 @@ export interface TableDef extends BlockBase {
   name: string
   title?: string
   columns: Record<string, ColumnDef>
-  /** Literal rows: objects keyed by column, or tuples in data-column order. */
-  rows: (Record<string, Literal> | Literal[])[]
+  /** Literal rows (objects keyed by column, or tuples in data-column order), or data("file.csv"). */
+  rows: (Record<string, Literal> | Literal[])[] | DataRef
   /** Footer aggregates per column. */
   totals?: Record<string, Aggregate>
+  /** Hand-typed values over formula cells. */
+  overrides?: Override[]
 }
 
 export interface QueryDef extends BlockBase {
@@ -154,10 +180,33 @@ export interface TextDef extends BlockBase {
 
 export type BlockDef = TableDef | QueryDef | ChartDef | MetricDef | ParamDef | TextDef
 
+export type Tone = "muted" | "positive" | "negative" | "accent"
+
+export interface CellStyle {
+  format?: Format
+  decimals?: number
+  bold?: boolean
+  italic?: boolean
+  align?: "left" | "center" | "right"
+  tone?: Tone
+}
+
+/** A free cell: a literal, a formula string starting with "=", or either plus styling. */
+export type CellEntry = Literal | (CellStyle & { value: Literal })
+
+export interface SheetOptions {
+  /** Free cells by A1 address: `{ A1: "Title", B3: 0.08, C3: "=B3 * 2" }`. */
+  cells?: Record<string, CellEntry>
+  /** Column widths in pixels by column letter: `{ A: 160 }`. */
+  widths?: Record<string, number>
+}
+
 export interface SheetDef {
   type: "sheet"
   name: string
   blocks: BlockDef[]
+  cells: Record<string, CellEntry>
+  widths: Record<string, number>
 }
 
 export interface WorkbookOptions {
