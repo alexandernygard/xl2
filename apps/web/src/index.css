@@ -3,7 +3,7 @@
 
 @source "../../../packages/viz/src";
 /* The share dialog and avatars from Drive. */
-@source "../node_modules/@alexandernygard/drive/src";
+@source "../node_modules/@alexandernygard/drive/dist";
 
 html,
 body,
