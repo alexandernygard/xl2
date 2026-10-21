@@ -74,7 +74,16 @@ export function cellLook(info: CellInfo, ctx: ViewContext): CellLook | null {
           className: "bg-muted font-medium text-foreground",
         }
       if (!column) return null
-      if (region.kind === "add") return { text: "", align: "left", className: "bg-muted/30" }
+      if (region.kind === "add") {
+        // the empty row under a table: typing here appends a row
+        const hint = info.table.source === "table" && info.columnIndex === 0
+        return {
+          text: hint ? "+ New row" : "",
+          align: "left",
+          className: "bg-muted/30 text-muted-foreground/70",
+          title: info.table.source === "table" ? "Type here to add a row" : undefined,
+        }
+      }
       const total = region.kind === "totals"
       if (isCellError(value))
         return { text: errorText(value), align: "left", className: "text-destructive", title: value.error }

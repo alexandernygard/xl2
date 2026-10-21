@@ -52,7 +52,7 @@ import {
   Slider,
   cn,
 } from "@alexandernygard/components"
-import { ChartBarIcon, CheckIcon, CodeIcon, DatabaseIcon, EllipsisIcon, FileSpreadsheetIcon, GripVerticalIcon, TableIcon, Trash2Icon } from "lucide-react"
+import { ArrowDownIcon, ArrowUpIcon, ChartBarIcon, CheckIcon, CodeIcon, DatabaseIcon, EllipsisIcon, FileSpreadsheetIcon, GripVerticalIcon, PlusIcon, TableIcon, Trash2Icon } from "lucide-react"
 import { cellLook } from "./cellView"
 import { Columns, HEADER_H, MAX_COLS, MAX_ROWS, MIN_W, ROW_H, ROW_HEADER_W, autoWidths } from "./geometry"
 import { OverlayContent } from "./overlays"
@@ -1239,6 +1239,21 @@ function GridMenu({
           <ContextMenuItem onSelect={() => onAction?.({ type: "reveal", block: table.index })}>
             <CodeIcon /> Show {table.name} in code
           </ContextMenuItem>
+          {editableTable && dataRows.length > 0 && (
+            <>
+              <ContextMenuItem onSelect={() => onIntent({ type: "addRow", table: table.name, at: dataRows[0] })}>
+                <ArrowUpIcon /> Insert row above
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => onIntent({ type: "addRow", table: table.name, at: dataRows[dataRows.length - 1] + 1 })}>
+                <ArrowDownIcon /> Insert row below
+              </ContextMenuItem>
+            </>
+          )}
+          {editableTable && dataRows.length === 0 && (
+            <ContextMenuItem onSelect={() => onIntent({ type: "addRow", table: table.name })}>
+              <PlusIcon /> Add row
+            </ContextMenuItem>
+          )}
           {editableTable && dataRows.length > 0 && (
             <ContextMenuItem
               variant="destructive"

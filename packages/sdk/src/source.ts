@@ -29,7 +29,8 @@ export type EditIntent =
   /** Type over a formula cell; value undefined clears the override. */
   | { type: "setOverride"; table: string; row: number; column: string; value: Literal | undefined; note?: string }
   | { type: "setParam"; name: string; value: Literal }
-  | { type: "addRow"; table: string; values?: Record<string, Literal> }
+  /** Append a row, or insert it before row `at`. */
+  | { type: "addRow"; table: string; values?: Record<string, Literal>; at?: number }
   | { type: "deleteRow"; table: string; row: number }
   | { type: "addColumn"; table: string; column: string; kind: ColumnKind; label?: string }
   | { type: "deleteColumn"; table: string; column: string }
@@ -454,6 +455,13 @@ function shiftOverrides(source: string, nodes: TableNodes, deleted: number): Spl
   return writeOverrides(source, nodes, next)
 }
 
+/** Overrides at or below an inserted row move down one. */
+function shiftOverridesDown(source: string, nodes: TableNodes, inserted: number): Splice | null {
+  const list = readOverrides(source, nodes.def)
+  if (!list?.some((o) => o.row >= inserted)) return null
+  return writeOverrides(source, nodes, list.map((o) => (o.row >= inserted ? { ...o, row: o.row + 1 } : o)))
+}
+
 // --- table intents (code rows) -------------------------------------------------
 
 function setCell(source: string, nodes: TableNodes, t: string, row: number, column: string, value: Literal): Splice {
@@ -480,7 +488,7 @@ function setCell(source: string, nodes: TableNodes, t: string, row: number, colu
   throw new EditError(`Row ${row + 1} of "${t}" is computed by code, so it can't be edited in the grid`)
 }
 
-function addRow(source: string, nodes: TableNodes, values: Record<string, Literal> = {}): Splice {
+function addRow(source: string, nodes: TableNodes, values: Record<string, Literal> = {}, at?: number): Splice {
   const cols = nodes.dataColumns
   if (!nodes.rows) {
     const obj = `{ ${cols.map((c) => `${identOrString(c)}: ${literalCode(values[c] ?? null)}`).join(", ")} }`
@@ -491,7 +499,12 @@ function addRow(source: string, nodes: TableNodes, values: Record<string, Litera
   const text = tuple
     ? `[${cols.map((c) => literalCode(values[c] ?? null)).join(", ")}]`
     : `{ ${cols.map((c) => `${identOrString(c)}: ${literalCode(values[c] ?? null)}`).join(", ")} }`
-  return appendItem(source, nodes.rows, els, text)
+  if (at === undefined || at >= els.length) return appendItem(source, nodes.rows, els, text)
+  // insert before row `at`, reusing the separator the list already has
+  const i = Math.max(0, at)
+  const sep =
+    els.length > 1 ? source.slice(els[i === els.length - 1 ? i - 1 : i].end!, els[i === els.length - 1 ? i : i + 1].start!) : ", "
+  return { start: els[i].start!, end: els[i].start!, text: text + sep }
 }
 
 function deleteRow(source: string, nodes: TableNodes, t: string, row: number): Splice {
@@ -578,13 +591,15 @@ function csvSetCell(text: string, columns: string[], row: number, column: string
   return text.slice(0, rec.end) + ",".repeat(ci - rec.cells.length + 1) + code + text.slice(rec.end)
 }
 
-function csvAddRow(text: string, columns: string[], values: Record<string, Literal> = {}): string {
+function csvAddRow(text: string, columns: string[], values: Record<string, Literal> = {}, at?: number): string {
   let header = csvHeader(text)
   if (!header.length) {
     header = columns
     text = encodeCsvRow(columns) + "\n"
   }
   const line = encodeCsvRow(header.map((k) => values[k] ?? null))
+  const before = at === undefined ? undefined : parseCsvRecords(text)[Math.max(0, at) + 1]
+  if (before) return `${text.slice(0, before.start)}${line}\n${text.slice(before.start)}`
   const sep = text === "" || text.endsWith("\n") ? "" : "\n"
   return `${text}${sep}${line}\n`
 }
@@ -647,8 +662,12 @@ function editBundle(bundle: Bundle, intent: EditIntent): Bundle {
     }
     case "addRow": {
       const nodes = tableNodes(ast, intent.table)
-      if (nodes.dataFile) return withFile(bundle, nodes.dataFile, csvAddRow(dataFileOf(bundle, nodes), nodes.dataColumns, intent.values))
-      return code(addRow(source, nodes, intent.values))
+      const shift = intent.at === undefined ? null : shiftOverridesDown(source, nodes, intent.at)
+      if (nodes.dataFile) {
+        const next = csvAddRow(dataFileOf(bundle, nodes), nodes.dataColumns, intent.values, intent.at)
+        return withFile(bundle, nodes.dataFile, next, shift ? apply(source, shift) : source)
+      }
+      return code([addRow(source, nodes, intent.values, intent.at), ...(shift ? [shift] : [])])
     }
     case "deleteRow": {
       const nodes = tableNodes(ast, intent.table)

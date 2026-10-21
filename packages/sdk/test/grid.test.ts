@@ -127,6 +127,9 @@ describe("data files", () => {
     expect(b.files["people.csv"]).toBe("name,age\nAda,36\nAlan,42\n")
     b = edit(b, { type: "addRow", table: "people", values: { name: "Grace, Hopper" } })
     expect(b.files["people.csv"]).toBe('name,age\nAda,36\nAlan,42\n"Grace, Hopper",\n')
+    expect(edit(b, { type: "addRow", table: "people", values: { name: "Ida" }, at: 1 }).files["people.csv"]).toBe(
+      'name,age\nAda,36\nIda,\nAlan,42\n"Grace, Hopper",\n',
+    )
     b = edit(b, { type: "deleteRow", table: "people", row: 0 })
     expect(table(model(b), "people").rows.map((r) => r[0])).toEqual(["Alan", "Grace, Hopper"])
     b = edit(b, { type: "addColumn", table: "people", column: "city", kind: "text" })
@@ -150,6 +153,9 @@ describe("overrides", () => {
     t = table(model(b), "sales")
     expect(t.rows).toEqual([["S", 20, 99]])
     expect(t.overridden).toEqual(["0:next"])
+    t = table(model(edit(b, { type: "addRow", table: "sales", values: { region: "W" }, at: 0 })), "sales")
+    expect(t.rows.map((r) => r[0])).toEqual(["W", "S"])
+    expect(t.overridden).toEqual(["1:next"])
     b = edit(b, { type: "setOverride", table: "sales", row: 0, column: "next", value: undefined })
     expect(b.source).not.toContain("overrides")
     expect(table(model(b), "sales").rows[0][2]).toBeCloseTo(22)
