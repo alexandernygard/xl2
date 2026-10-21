@@ -47,7 +47,7 @@ interface MatchedRef extends FormulaRef {
   raw: string
 }
 
-function mapRefs(expr: string, fn: (ref: MatchedRef, text: string) => string, rewriteNe: boolean): string {
+function mapRefs(expr: string, fn: (ref: MatchedRef, text: string, at: number) => string, rewriteNe: boolean): string {
   let out = ""
   let i = 0
   while (i < expr.length) {
@@ -59,7 +59,7 @@ function mapRefs(expr: string, fn: (ref: MatchedRef, text: string) => string, re
       const from = m[3].replace(/\$/g, "")
       const to = m[4]?.replace(/\$/g, "")
       const raw = m[4] ? `${m[3]}:${m[4]}` : m[3]
-      out += fn({ sheet, from, to, raw }, m[0])
+      out += fn({ sheet, from, to, raw }, m[0], i)
       i += m[0].length
       continue
     }
@@ -87,6 +87,22 @@ function mapRefs(expr: string, fn: (ref: MatchedRef, text: string) => string, re
     i++
   }
   return out
+}
+
+export interface FormulaRefSpan extends FormulaRef {
+  /** Offsets into the formula text, end exclusive. */
+  start: number
+  end: number
+}
+
+/** Where each reference sits in the formula text, for highlighting while editing. */
+export function formulaRefSpans(formula: string): FormulaRefSpan[] {
+  const spans: FormulaRefSpan[] = []
+  mapRefs(formula, (ref, text, at) => {
+    spans.push({ sheet: ref.sheet, from: ref.from, to: ref.to, start: at, end: at + text.length })
+    return text
+  }, false)
+  return spans
 }
 
 // IFERROR(x, y) must see x's error, so x becomes a thunk.

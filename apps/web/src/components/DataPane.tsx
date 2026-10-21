@@ -5,8 +5,8 @@ import {
   cellLabel,
   colName,
   editTextFor,
+  formulaNames,
   formulaSource,
-  inputIntents,
   isEditable,
   parseAddress,
   rangeName,
@@ -17,7 +17,17 @@ import {
   type TableModel,
 } from "@xl2/sdk"
 import { ReviewBar, useDiff } from "./Review"
-import { SheetGrid, SheetTabs, selectionRect, type GridAction, type SheetGridHandle } from "@xl2/viz"
+import {
+  FormulaAssistPanel,
+  FormulaInput,
+  FunctionPalette,
+  SheetGrid,
+  SheetTabs,
+  selectionRect,
+  useFormulaAssist,
+  type GridAction,
+  type SheetGridHandle,
+} from "@xl2/viz"
 import {
   Button,
   DropdownMenu,
@@ -47,7 +57,6 @@ import {
   ItalicIcon,
   PlusIcon,
   RotateCcwIcon,
-  SigmaIcon,
   SlidersHorizontalIcon,
   TableIcon,
   TypeIcon,
@@ -259,15 +268,25 @@ function Toolbar({ sheet }: { sheet: SheetModel | null }) {
 
 // --- formula bar ------------------------------------------------------------------------
 
-function FormulaBar({ sheet, grid }: { sheet: SheetModel | null; grid: React.RefObject<SheetGridHandle | null> }) {
+function FormulaBar({
+  sheet,
+  grid,
+  live,
+  names,
+}: {
+  sheet: SheetModel | null
+  grid: React.RefObject<SheetGridHandle | null>
+  /** The text of the edit open in the grid, if any. */
+  live: { text: string; typed: boolean } | null
+  names: ReturnType<typeof formulaNames>
+}) {
   const info = useFocusInfo(sheet)
   const selection = useStore((s) => s.selection)
   const source = useStore((s) => s.files[s.activeId]?.source ?? "")
-  const [draft, setDraft] = React.useState("")
   const [name, setName] = React.useState("")
+  const [focused, setFocused] = React.useState(false)
+  const bar = React.useRef<HTMLInputElement>(null)
   const display = info ? editTextFor(info) : ""
-  const key = info ? `${sheet?.name}:${info.address}` : ""
-  React.useEffect(() => setDraft(display), [display, key])
   const rect = selection ? selectionRect(selection) : null
   const addr = rect ? rangeName(rect) : ""
   React.useEffect(() => setName(addr), [addr])
@@ -279,15 +298,30 @@ function FormulaBar({ sheet, grid }: { sheet: SheetModel | null; grid: React.Ref
       : formulaSource(source, info.table.name, info.column!.key)
     : null
   const editable = !!info && isEditable(info)
+  const [value, setValue] = React.useState(display)
+  // whether the grid has an edit open for this bar; set at once, since `live` arrives a render later
+  const editing = React.useRef(false)
+  const key = info ? `${sheet?.name}:${info.address}` : ""
+  React.useEffect(() => {
+    // while this bar drives the edit, take only the grid's own changes (pointing at cells, inserts)
+    if (live !== null) {
+      if (!editing.current || !live.typed) setValue(live.text)
+    } else {
+      editing.current = false
+      setValue(display)
+    }
+  }, [live, display, key])
 
-  const commit = () => {
-    if (!sheet || !info || draft === display) return
-    const res = inputIntents(sheet, info, draft)
-    if (!res.ok) {
-      toast.error(res.error)
-      setDraft(display)
-    } else if (res.intents.length) report(useStore.getState().applyIntent(res.intents))
+  // typing here edits the cell in the grid, so clicking cells inserts references just like in-cell editing
+  const change = (text: string) => {
+    setValue(text)
+    if (editing.current) grid.current?.setEditText(text)
+    else {
+      editing.current = true
+      grid.current?.edit(text, { input: bar.current })
+    }
   }
+  const assist = useFormulaAssist({ text: value, input: bar, names, onText: change })
 
   const goTo = () => {
     const [a, b] = name.trim().toUpperCase().split(":")
@@ -317,31 +351,60 @@ function FormulaBar({ sheet, grid }: { sheet: SheetModel | null; grid: React.Ref
       <span className="w-40 shrink-0 truncate font-mono text-xs text-muted-foreground" title={info ? cellLabel(info) : undefined}>
         {info && info.kind !== "empty" && info.kind !== "free" ? cellLabel(info) : ""}
       </span>
-      <SigmaIcon className="size-3.5 shrink-0 text-muted-foreground" />
+      <FunctionPalette onPick={(fn) => grid.current?.insertText(`${fn}()`, 1)}>
+        <Button
+          size="xs"
+          variant="ghost"
+          data-formula-keep
+          disabled={!editable}
+          aria-label="Insert function"
+          title="Insert function"
+          className="shrink-0 font-mono text-xs font-semibold italic"
+        >
+          fx
+        </Button>
+      </FunctionPalette>
       {formula && !(info?.kind === "table" && info.overridden) ? (
         <code className="min-w-0 flex-1 truncate font-mono text-xs text-info" title={`${formula}\nType in the cell to override this value.`}>
           {formula}
         </code>
       ) : (
-        <input
-          aria-label="Cell contents"
-          className={cn("h-7 min-w-0 flex-1 bg-transparent outline-none disabled:opacity-50", draft.startsWith("=") && "font-mono text-xs")}
-          disabled={!editable}
-          value={draft}
-          placeholder={info?.kind === "empty" ? "Type a value or =formula" : ""}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              commit()
-              grid.current?.focus()
-            }
-            if (e.key === "Escape") {
-              setDraft(display)
-              grid.current?.focus()
-            }
-          }}
-        />
+        <div className="relative h-7 min-w-0 flex-1">
+          <FormulaInput
+            ref={bar}
+            aria-label="Cell contents"
+            className={cn("size-full", value.startsWith("=") && "font-mono text-xs")}
+            inputClassName="px-0 disabled:opacity-50"
+            disabled={!editable}
+            value={value}
+            placeholder={info?.kind === "empty" ? "Type a value or =formula (fx lists the functions)" : ""}
+            onChange={(e) => {
+              change(e.target.value)
+              assist.track()
+            }}
+            onSelect={assist.track}
+            onKeyUp={assist.track}
+            onClick={assist.track}
+            onFocus={() => setFocused(true)}
+            onBlur={(e) => {
+              setFocused(false)
+              if ((e.relatedTarget as HTMLElement | null)?.closest?.("[data-formula-keep]")) return
+              grid.current?.commitEdit()
+            }}
+            onKeyDown={(e) => {
+              if (assist.onKeyDown(e)) return
+              if (e.key === "Enter") {
+                e.preventDefault()
+                grid.current?.commitEdit()
+              }
+              if (e.key === "Escape") {
+                e.preventDefault()
+                grid.current?.cancelEdit()
+              }
+            }}
+          />
+          {focused && live !== null && <FormulaAssistPanel assist={assist} className="absolute top-full left-0 z-50 mt-1" />}
+        </div>
       )}
       {info?.kind === "table" && info.overridden && info.column && info.region.kind === "data" && (
         <Button
@@ -378,6 +441,9 @@ export function DataPane() {
   const { select, selectBlock, applyIntent, setActiveSheet, revealTarget, setView } = useStore.getState()
   const grid = React.useRef<SheetGridHandle>(null)
   const sheet = useActiveSheet()
+  const [live, setLive] = React.useState<{ text: string; typed: boolean } | null>(null)
+  const onEditingChange = React.useCallback((text: string | null, typed: boolean) => setLive(text === null ? null : { text, typed }), [])
+  const names = React.useMemo(() => formulaNames(model), [model])
   const diff = useDiff()
   const scrollRequest = useStore((s) => s.scrollRequest)
   const sheetChanges = React.useMemo(() => diff?.sheets.find((d) => d.sheet === sheet?.name) ?? null, [diff, sheet?.name])
@@ -425,7 +491,7 @@ export function DataPane() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <Toolbar sheet={sheet} />
-      <FormulaBar sheet={sheet} grid={grid} />
+      <FormulaBar sheet={sheet} grid={grid} live={live} names={names} />
       {error && (
         <div className="flex shrink-0 items-start gap-2 border-b bg-destructive/10 px-3 py-2 text-sm text-destructive">
           <CircleAlertIcon className="mt-0.5 size-4 shrink-0" />
@@ -467,6 +533,8 @@ export function DataPane() {
           onError={onError}
           onAction={onAction}
           changes={sheetChanges}
+          names={names}
+          onEditingChange={onEditingChange}
         />
       ) : (
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">{error ? "" : <Spinner />}</div>

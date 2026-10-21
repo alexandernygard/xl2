@@ -12,19 +12,23 @@ import {
   colName,
   editTextFor,
   fillIntents,
+  formulaCaret,
   inputIntents,
   isEditable,
   isOverlay,
   jump,
+  parseRange,
   parseTsv,
   pasteIntents,
   rangeName,
   styleIntents,
   type BlockModel,
+  type Cell,
   type CellInfo,
   type ClipCell,
   type EditIntent,
   type Format,
+  type FormulaNames,
   type ParamModel,
   type Rect,
   type SheetDiff,
@@ -57,6 +61,7 @@ import { cellLook } from "./cellView"
 import { Columns, HEADER_H, MAX_COLS, MAX_ROWS, MIN_W, ROW_H, ROW_HEADER_W, autoWidths } from "./geometry"
 import { OverlayContent } from "./overlays"
 import { AddColumn } from "./AddColumn"
+import { FormulaAssistPanel, FormulaInput, coloredRefs, insertAt, useFormulaAssist } from "./FormulaAssist"
 import type { GridSelection, IntentHandler, ViewContext } from "./types"
 
 export type GridAction =
@@ -75,6 +80,10 @@ export interface SheetGridProps {
   onAction?: (action: GridAction) => void
   /** Changes under review, highlighted cell by cell. */
   changes?: SheetDiff | null
+  /** Tables and params for formula completions. */
+  names?: FormulaNames
+  /** The text being edited, or null when no edit is open (to mirror it in a formula bar). `typed` is false for the grid's own changes, like pointing at cells. */
+  onEditingChange?: (text: string | null, typed: boolean) => void
   className?: string
   ref?: React.Ref<SheetGridHandle>
 }
@@ -82,14 +91,33 @@ export interface SheetGridProps {
 export interface SheetGridHandle {
   focus(): void
   scrollTo(row: number, col: number): void
-  /** Start editing the focused cell with this text (e.g. from a formula bar). */
-  edit(text?: string): void
+  /** Start editing the focused cell with this text. With `input`, that input (a formula bar) does the typing. */
+  edit(text?: string, opts?: { input?: HTMLInputElement | null }): void
+  /** Replace the text of the open edit. */
+  setEditText(text: string): void
+  /** Insert at the caret of the open edit, or start a formula with it; `back` moves the caret left. */
+  insertText(text: string, back?: number): void
+  commitEdit(): void
+  cancelEdit(): void
 }
 
-type Editing = { row: number; col: number; text: string; original: string; mode: "enter" | "edit" }
+type Editing = {
+  row: number
+  col: number
+  text: string
+  original: string
+  mode: "enter" | "edit"
+  /** Typing happens in an input outside the grid (the formula bar). */
+  external?: boolean
+  /** The last change came from typing (not pointing or inserting). */
+  typed?: boolean
+  /** The reference last inserted by pointing at cells; pointing again replaces it. */
+  point?: { start: number; end: number; anchor: Cell; focus: Cell }
+}
 
 type Drag =
   | { kind: "select" }
+  | { kind: "point" }
   | { kind: "fill"; source: Rect; target: Rect }
   | { kind: "move"; block: BlockModel; origin: Rect; rect: Rect; x: number; y: number; moved: boolean }
   | { kind: "resize"; block: BlockModel; origin: Rect; rect: Rect }
@@ -117,9 +145,26 @@ const one = (row: number, col: number): GridSelection => ({ anchor: { row, col }
 let internalClip: { text: string; cells: ClipCell[][]; from: { row: number; col: number } } | null = null
 
 /** One sheet as an infinite, virtualized grid. Tables, params and free cells sit in cells; charts, metrics and text float over them. */
-export function SheetGrid({ sheet, ctx, selection, selectedBlock, onSelect, onSelectBlock, onIntent, onError, onAction, changes, className, ref }: SheetGridProps) {
+export function SheetGrid({
+  sheet,
+  ctx,
+  selection,
+  selectedBlock,
+  onSelect,
+  onSelectBlock,
+  onIntent,
+  onError,
+  onAction,
+  changes,
+  names,
+  onEditingChange,
+  className,
+  ref,
+}: SheetGridProps) {
   const scroller = React.useRef<HTMLDivElement>(null)
   const input = React.useRef<HTMLInputElement>(null)
+  const externalInput = React.useRef<HTMLInputElement | null>(null)
+  const pendingCaret = React.useRef<number | null>(null)
   const [view, setView] = React.useState({ top: 0, left: 0, w: 1200, h: 800 })
   const [editing, setEditing] = React.useState<Editing | null>(null)
   const [drag, setDrag] = React.useState<Drag | null>(null)
@@ -251,7 +296,7 @@ export function SheetGrid({ sheet, ctx, selection, selectedBlock, onSelect, onSe
   )
 
   const startEdit = React.useCallback(
-    (text?: string) => {
+    (text?: string, external?: HTMLInputElement | null) => {
       if (!focus) return
       const info = cellAt(sheet, focus.row, focus.col)
       if (!isEditable(info)) {
@@ -260,7 +305,9 @@ export function SheetGrid({ sheet, ctx, selection, selectedBlock, onSelect, onSe
         return
       }
       const original = editTextFor(info)
-      setEditing({ row: focus.row, col: focus.col, original, text: text ?? original, mode: text === undefined ? "edit" : "enter" })
+      externalInput.current = external ?? null
+      const mode = text === undefined || external ? "edit" : "enter"
+      setEditing({ row: focus.row, col: focus.col, original, text: text ?? original, mode, external: !!external })
       ensureVisible(focus.row, focus.col)
     },
     [focus, sheet, onError, ensureVisible],
@@ -282,20 +329,83 @@ export function SheetGrid({ sheet, ctx, selection, selectedBlock, onSelect, onSe
     [sheet, onError, emit, move],
   )
 
+  const cancel = () => {
+    // cleared first: moving focus blurs the editor, and its blur would otherwise commit
+    live.current = null
+    setEditing(null)
+    scroller.current?.focus({ preventScroll: true })
+  }
+
+  const activeInput = () => (live.current?.external ? externalInput.current : input.current)
+
   React.useImperativeHandle(ref, () => ({
     focus: () => scroller.current?.focus({ preventScroll: true }),
     scrollTo: (row, col) => ensureVisible(row, col),
-    edit: (text) => startEdit(text),
+    edit: (text, opts) => startEdit(text, opts?.input),
+    setEditText: (text) => setEditing((e) => e && { ...e, text, typed: true, point: undefined }),
+    insertText: (text, back = 0) => {
+      const e = live.current
+      if (!e) {
+        const t = "=" + text
+        pendingCaret.current = t.length - back
+        return startEdit(t)
+      }
+      const el = activeInput()
+      const from = el?.selectionStart ?? e.text.length
+      // a formula needs its "=" first
+      const ins = e.text === "" && !text.startsWith("=") ? "=" + text : text
+      const r = insertAt(e.text, from, el?.selectionEnd ?? from, ins)
+      pendingCaret.current = r.caret - back
+      setEditing({ ...e, text: r.text, typed: false, point: undefined })
+    },
+    commitEdit: () => live.current && commit(live.current),
+    cancelEdit: () => cancel(),
   }))
 
-  // keep the editor's caret at the end when typing starts it
-  React.useEffect(() => {
-    if (editing && input.current && document.activeElement !== input.current) {
-      input.current.focus()
-      const n = input.current.value.length
-      input.current.setSelectionRange(n, n)
+  // focus the editor when an edit starts (caret at the end), and place the caret after programmatic changes
+  React.useLayoutEffect(() => {
+    if (!editing) return
+    const el = editing.external ? externalInput.current : input.current
+    if (!el) return
+    const c = pendingCaret.current
+    if (c !== null) {
+      pendingCaret.current = null
+      el.focus()
+      el.setSelectionRange(c, c)
+    } else if (!editing.external && document.activeElement !== el) {
+      el.focus()
+      el.setSelectionRange(el.value.length, el.value.length)
     }
   }, [editing])
+
+  const editText = editing ? editing.text : null
+  const typed = !!editing?.typed
+  React.useEffect(() => onEditingChange?.(editText, typed), [editText, typed, onEditingChange])
+
+  // --- pointing at cells while typing a formula ---------------------------------------
+  const pointAt = (e: Editing, caret: number) => (e.point && e.point.end === caret ? e.point : null)
+  const canPoint = (e: Editing, caret: number) => e.text.startsWith("=") && (!!pointAt(e, caret) || formulaCaret(e.text, caret).canPoint)
+  /** Put a reference to anchor:focus at the caret, replacing the one just pointed at. */
+  const pointTo = (e: Editing, anchor: Cell, to: Cell, caret: number) => {
+    const p = pointAt(e, caret)
+    const ref = rangeName(selectionRect({ anchor, focus: to }))
+    const r = insertAt(e.text, p ? p.start : caret, p ? p.end : caret, ref)
+    pendingCaret.current = r.caret
+    setEditing({ ...e, text: r.text, typed: false, point: { start: r.caret - ref.length, end: r.caret, anchor, focus: to } })
+  }
+  const pointKey = (dr: number, dc: number, extend: boolean) => {
+    const e = live.current
+    const el = activeInput()
+    if (!e || !el || el.selectionStart !== el.selectionEnd) return false
+    const caret = el.selectionStart ?? e.text.length
+    const p = pointAt(e, caret)
+    if (!p && !(e.mode === "enter" && canPoint(e, caret))) return false
+    const base = p ? p.focus : { row: e.row, col: e.col }
+    const to = { row: Math.max(0, Math.min(MAX_ROWS - 1, base.row + dr)), col: Math.max(0, Math.min(MAX_COLS - 1, base.col + dc)) }
+    pointTo(e, p && extend ? p.anchor : to, to, caret)
+    ensureVisible(to.row, to.col)
+    return true
+  }
 
   // an edit in progress is dropped if the sheet changes under it from elsewhere
   React.useEffect(() => setEditing(null), [sheet.name])
@@ -469,7 +579,10 @@ export function SheetGrid({ sheet, ctx, selection, selectedBlock, onSelect, onSe
         return
       }
       const cell = pointToCell(e.clientX, e.clientY)
-      if (d.kind === "select" && selection) {
+      if (d.kind === "point") {
+        const ed = live.current
+        if (ed?.point && (cell.row !== ed.point.focus.row || cell.col !== ed.point.focus.col)) pointTo(ed, ed.point.anchor, cell, ed.point.end)
+      } else if (d.kind === "select" && selection) {
         if (cell.row !== selection.focus.row || cell.col !== selection.focus.col) onSelect({ anchor: selection.anchor, focus: cell })
       } else if (d.kind === "fill") {
         const s = d.source
@@ -530,18 +643,13 @@ export function SheetGrid({ sheet, ctx, selection, selectedBlock, onSelect, onSe
     if (e.button !== 0) return
     const cell = pointToCell(e.clientX, e.clientY)
     if (editing) {
-      // pointing at cells while typing a formula inserts references
-      const el = input.current
-      const caret = el?.selectionStart ?? editing.text.length
-      if (editing.text.startsWith("=") && /[=+\-*/(,<>&^:\s]$/.test(editing.text.slice(0, caret))) {
+      // pointing at cells while typing a formula inserts references; dragging makes a range
+      const caret = activeInput()?.selectionStart ?? editing.text.length
+      if (canPoint(editing, caret)) {
         e.preventDefault()
-        const ref = address(cell.row, cell.col)
-        const text = editing.text.slice(0, caret) + ref + editing.text.slice(caret)
-        setEditing({ ...editing, text, mode: "edit" })
-        requestAnimationFrame(() => {
-          el?.focus()
-          el?.setSelectionRange(caret + ref.length, caret + ref.length)
-        })
+        const p = pointAt(editing, caret)
+        pointTo(editing, e.shiftKey && p ? p.anchor : cell, cell, caret)
+        setDrag({ kind: "point" })
         return
       }
       commit(editing)
@@ -622,6 +730,14 @@ export function SheetGrid({ sheet, ctx, selection, selectedBlock, onSelect, onSe
 
   const selCols = sel ? [sel.col, sel.col + sel.cols - 1] : [-1, -1]
   const selRows = sel ? [sel.row, sel.row + sel.rows - 1] : [-1, -1]
+
+  const editRefs = editing
+    ? coloredRefs(editing.text).flatMap((r) => {
+        if (r.sheet !== undefined && r.sheet !== sheet.name) return []
+        const rect = parseRange(r.to ? `${r.from}:${r.to}` : r.from)
+        return rect ? [{ ...r, rect }] : []
+      })
+    : []
 
   const paramSlider =
     focusInfo?.kind === "param" && focusInfo.part === "value" && focusInfo.param.min !== undefined && focusInfo.param.max !== undefined && !editing
@@ -897,19 +1013,41 @@ export function SheetGrid({ sheet, ctx, selection, selectedBlock, onSelect, onSe
                   />
                 )}
 
+                {/* references in the formula being edited */}
+                {editRefs.map((r) => {
+                  if (!near(r.rect)) return null
+                  const pointing = editing?.point?.start === r.start
+                  return (
+                    <div
+                      key={`ref:${r.start}`}
+                      className={cn("pointer-events-none absolute z-[10] rounded-[2px] border-2", pointing && "border-dashed")}
+                      style={{ ...cellBox(r.rect.row, r.rect.col, r.rect.rows, r.rect.cols), borderColor: r.color, backgroundColor: `${r.color}14` }}
+                    />
+                  )
+                })}
+
                 {/* editor */}
-                {editing && (
+                {editing?.external ? (
+                  <div
+                    className={cn(
+                      "pointer-events-none absolute z-[20] truncate bg-card px-2 text-[13px] leading-[27px] shadow-md ring-2 ring-highlight",
+                      editing.text.startsWith("=") && "font-mono text-[12px]",
+                    )}
+                    style={{ ...cellBox(editing.row, editing.col), minWidth: cellBox(editing.row, editing.col).width }}
+                  >
+                    {editing.text}
+                  </div>
+                ) : editing && (
                   <CellEditor
                     ref={input}
                     editing={editing}
                     info={cellAt(sheet, editing.row, editing.col)}
                     box={cellBox(editing.row, editing.col)}
-                    onChange={(text) => setEditing((e) => e && { ...e, text })}
+                    names={names}
+                    onPoint={pointKey}
+                    onChange={(text) => setEditing((e) => e && { ...e, text, typed: true, point: undefined })}
                     onCommit={(then) => commit(editing, then)}
-                    onCancel={() => {
-                      setEditing(null)
-                      scroller.current?.focus({ preventScroll: true })
-                    }}
+                    onCancel={cancel}
                   />
                 )}
 
@@ -957,14 +1095,18 @@ function CellEditor({
   editing,
   info,
   box,
+  names,
+  onPoint,
   onChange,
   onCommit,
   onCancel,
 }: {
-  ref: React.Ref<HTMLInputElement>
+  ref: React.RefObject<HTMLInputElement | null>
   editing: Editing
   info: CellInfo
   box: { left: number; top: number; width: number; height: number }
+  names?: FormulaNames
+  onPoint: (dRow: number, dCol: number, extend: boolean) => boolean
   onChange: (text: string) => void
   onCommit: (then?: [number, number]) => void
   onCancel: () => void
@@ -972,24 +1114,34 @@ function CellEditor({
   const options = info.kind === "table" ? info.column?.options : info.kind === "param" ? info.param.options : undefined
   const listId = options ? `opts-${info.address}` : undefined
   const width = Math.max(box.width, Math.min(480, editing.text.length * 7.6 + 24))
+  const formula = editing.text.startsWith("=")
+  const assist = useFormulaAssist({ text: editing.text, input: ref, names, onText: onChange })
+  const arrows: Record<string, [number, number]> = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }
   return (
     <>
-      <input
+      <FormulaInput
         ref={ref}
         aria-label={`Edit ${cellLabel(info)}`}
         list={listId}
         value={editing.text}
-        spellCheck={false}
-        className={cn(
-          "absolute z-[20] bg-card px-2 text-[13px] shadow-md ring-2 ring-highlight outline-none",
-          editing.text.startsWith("=") && "font-mono text-[12px]",
-        )}
+        className={cn("absolute z-[20] bg-card text-[13px] shadow-md ring-2 ring-highlight", formula && "font-mono text-[12px]")}
         style={{ left: box.left, top: box.top, width, height: box.height }}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={() => onCommit()}
+        onChange={(e) => {
+          onChange(e.target.value)
+          assist.track()
+        }}
+        onSelect={assist.track}
+        onKeyUp={assist.track}
+        onClick={assist.track}
+        onBlur={(e) => {
+          // the function palette keeps the edit open while you pick
+          if ((e.relatedTarget as HTMLElement | null)?.closest?.("[data-formula-keep]")) return
+          onCommit()
+        }}
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           e.stopPropagation()
+          if (assist.onKeyDown(e)) return
           if (e.key === "Enter") {
             e.preventDefault()
             onCommit(e.shiftKey ? [-1, 0] : [1, 0])
@@ -999,15 +1151,19 @@ function CellEditor({
           } else if (e.key === "Escape") {
             e.preventDefault()
             onCancel()
-          } else if (editing.mode === "enter" && !editing.text.startsWith("=")) {
-            const arrows: Record<string, [number, number]> = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }
-            if (arrows[e.key]) {
-              e.preventDefault()
-              onCommit(arrows[e.key])
-            }
+          } else if (arrows[e.key] && formula) {
+            // arrows point at cells after an operator, like Excel; otherwise they move the caret
+            const [dr, dc] = arrows[e.key]
+            if (onPoint(dr, dc, e.shiftKey)) e.preventDefault()
+          } else if (editing.mode === "enter" && arrows[e.key]) {
+            e.preventDefault()
+            onCommit(arrows[e.key])
           }
         }}
       />
+      {formula && (
+        <FormulaAssistPanel assist={assist} className="absolute z-[21]" style={{ left: box.left, top: box.top + box.height + 4 }} />
+      )}
       {options && (
         <datalist id={listId}>
           {options.map((o) => (

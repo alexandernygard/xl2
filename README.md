@@ -34,6 +34,15 @@ code + CSV files ──worker: run()──▶ WorkbookModel (values placed on ea
   - Formula cell: an `override` is recorded, marked with a corner tick and reversible from the formula bar.
   - Param: the param's value changes.
   - Empty cell: a free cell is created.
+- **Building formulas.** Type `=` in a cell or the formula bar and a help panel opens under it:
+  - Click a cell, or drag a range, to insert its reference. Clicking again replaces it, and Shift+click extends it. Arrow keys point too, as in Excel (Shift+arrows for a range).
+  - References are coloured in the text and outlined on the grid in the same colour.
+  - Completions cover functions, tables and params. After `sales.` you get Rows methods, and inside `sales.sum("` the column keys. Press Tab to insert.
+  - Inside a call, the function's arguments show with the current one marked.
+  - Operator chips (`+ − × ÷`, comparisons, `and`/`or`) insert at the caret.
+  - The **fx** button in the formula bar opens a searchable list of every function, with arguments and an example.
+
+  The function docs live in `@xl2/sdk` (`FUNCTION_DOCS`, `formulaSuggestions`, `formulaCaret`).
 - **Moving.** Dragging a chart, metric, text block, table grip or param grip rewrites its `at`. Drops that would overlap another block are refused. Column resizes write `widths`.
 - **Code → grid.** Every change (editor, AI, undo) is evaluated in a worker. If it fails, the last good model stays up with an error banner and a marker in the editor. The editor also type-checks against the real SDK types, with completions and hover.
 - **Grid → code.** Selecting a cell highlights its literal, its CSV cell, its formula or its block in the code pane.
