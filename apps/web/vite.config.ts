@@ -44,6 +44,9 @@ function tsEnv(): Plugin {
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), tsEnv()],
+  // Yjs breaks if two copies are loaded; make sure collab and the app share one.
+  resolve: { dedupe: ["yjs", "lib0", "y-protocols"] },
   worker: { format: "es", plugins: () => [tsEnv()] },
-  server: { port: 5199 },
+  // Shared workbooks talk to the Worker's Durable Objects; `pnpm dev:worker` serves them on :8787.
+  server: { port: 5199, proxy: { "/collab": { target: "http://localhost:8787", ws: true } } },
 })

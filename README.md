@@ -8,7 +8,16 @@ pnpm dev        # http://localhost:5199
 pnpm test       # SDK tests
 ```
 
-Add your Anthropic API key under Settings (gear icon) to use the assistant. It stays in the browser's localStorage and is only sent to api.anthropic.com. There is no server.
+Add your Anthropic API key under Settings (gear icon) to use the assistant. It stays in the browser's localStorage and is only sent to api.anthropic.com. Workbooks live in your browser; the only server code is the optional live-collaboration Worker (below).
+
+### Sharing a workbook live
+
+Share in the header makes the workbook live: others open the link and edit together, with each other's selections visible. The workbook code and CSVs sync through a Durable Object (`apps/worker`, built on `@alexandernygard/collab`). Anyone with the link can edit; there are no accounts yet.
+
+```bash
+pnpm dev:worker   # Worker + Durable Object on :8787 (vite proxies /collab to it)
+pnpm dev          # the app
+```
 
 ## Packages
 

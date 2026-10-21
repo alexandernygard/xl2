@@ -6,6 +6,14 @@ export interface GridSelection {
   focus: Cell
 }
 
+/** Someone else's selection on this sheet, drawn in their colour with their name. */
+export interface GridPeer {
+  id: string | number
+  name: string
+  color: string
+  selection: GridSelection
+}
+
 /** Views never change data themselves; they emit intents for the host to apply to the source. */
 export type IntentHandler = (intent: EditIntent | EditIntent[]) => void
 

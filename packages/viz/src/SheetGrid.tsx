@@ -62,7 +62,7 @@ import { Columns, HEADER_H, MAX_COLS, MAX_ROWS, MIN_W, ROW_H, ROW_HEADER_W, auto
 import { OverlayContent } from "./overlays"
 import { AddColumn } from "./AddColumn"
 import { FormulaAssistPanel, FormulaInput, coloredRefs, insertAt, useFormulaAssist } from "./FormulaAssist"
-import type { GridSelection, IntentHandler, ViewContext } from "./types"
+import type { GridPeer, GridSelection, IntentHandler, ViewContext } from "./types"
 
 export type GridAction =
   | { type: "reveal"; block: number }
@@ -72,6 +72,8 @@ export interface SheetGridProps {
   sheet: SheetModel
   ctx: ViewContext
   selection: GridSelection | null
+  /** Other people's selections on this sheet (live collaboration). */
+  peers?: GridPeer[]
   selectedBlock: number | null
   onSelect: (sel: GridSelection | null) => void
   onSelectBlock: (index: number | null) => void
@@ -149,6 +151,7 @@ export function SheetGrid({
   sheet,
   ctx,
   selection,
+  peers,
   selectedBlock,
   onSelect,
   onSelectBlock,
@@ -930,6 +933,23 @@ export function SheetGrid({
                       style={box}
                     >
                       {c.kind === "removed" ? `Removed ${c.label}` : `${c.label} was here`}
+                    </div>
+                  )
+                })}
+
+                {/* other people's selections */}
+                {peers?.map((p) => {
+                  const r = selectionRect(p.selection)
+                  const box = cellBox(r.row, r.col, r.rows, r.cols)
+                  return (
+                    <div key={p.id} className="pointer-events-none absolute z-[4]" style={box}>
+                      <div className="absolute inset-0 border-2" style={{ borderColor: p.color, background: `color-mix(in srgb, ${p.color} 12%, transparent)` }} />
+                      <div
+                        className="absolute bottom-full left-[-2px] max-w-40 truncate rounded-t-sm px-1 text-[10px] leading-4 font-medium text-white"
+                        style={{ background: p.color }}
+                      >
+                        {p.name}
+                      </div>
                     </div>
                   )
                 })}

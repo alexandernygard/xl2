@@ -171,10 +171,13 @@ importers:
     devDependencies:
       wrangler:
         specifier: ^4.151.2
-        version: 4.151.2
+        version: 4.151.2(@cloudflare/workers-types@5.20261019.1)
 
   apps/web:
     dependencies:
+      '@alexandernygard/collab':
+        specifier: ^0.1.0
+        version: 0.1.0(react@19.3.1)(yjs@13.6.33)
       '@alexandernygard/components':
         specifier: ^0.1.4
         version: 0.1.4(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@19.3.1)(react@19.3.1)(redux@5.0.1)
@@ -229,6 +232,9 @@ importers:
       typescript:
         specifier: ~5.9.3
         version: 5.9.3
+      yjs:
+        specifier: ^13.6.33
+        version: 13.6.33
       zustand:
         specifier: ^5.0.15
         version: 5.0.15(@types/react@19.3.0)(immer@11.1.21)(react@19.3.1)(use-sync-external-store@1.7.0(react@19.3.1))
@@ -251,6 +257,19 @@ importers:
       vite:
         specifier: ^8.3.4
         version: 8.3.4(esbuild@0.28.2)(jiti@2.7.0)
+
+  apps/worker:
+    dependencies:
+      '@alexandernygard/collab':
+        specifier: ^0.1.0
+        version: 0.1.0(react@19.3.1)(yjs@13.6.33)
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^5.20261019.1
+        version: 5.20261019.1
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
 
   packages/sdk:
     dependencies:
@@ -303,6 +322,16 @@ importers:
         version: 5.9.3
 
 packages:
+
+  '@alexandernygard/collab@0.1.0':
+    resolution: {integrity: sha512-bNjTRC7V9+aqVfBl2jLBm6TEUTOXZHFp/uEUXzGi9431GPh2IaJT9k8L8qPxW8JpYz1pMKJsI4cS7O5valpA6A==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      react: '>=18'
+      yjs: ^13.6.0
+    peerDependenciesMeta:
+      react:
+        optional: true
 
   '@alexandernygard/components@0.1.4':
     resolution: {integrity: sha512-Vim54UhvV4168A7VBuvdQePEyyEl0Y1JqOyHpn2nhyPLCXZn2AdepJQO39VENEXqbzWaP38L4PswoehrR9zXCQ==}
@@ -418,6 +447,9 @@ packages:
     engines: {node: '>=16'}
     cpu: [x64]
     os: [win32]
+
+  '@cloudflare/workers-types@5.20261019.1':
+    resolution: {integrity: sha512-llvvy7WBVhK+OfykyBkG9A7OgsGvgwHSNyU40XGVkiy/xVFy0t/xflyhEBHT+U59yQECZQbmcZsJtqCNnLpIRg==}
 
   '@codemirror/autocomplete@6.20.3':
     resolution: {integrity: sha512-tlosUqb+3BbxCxZdu4tKeRghPFC+QM7q4X5YhKV2eCmPG+1r2F3f4AaSz5sCrFqUtX4Jh20VFTKecl16MgiV9g==}
@@ -2045,6 +2077,9 @@ packages:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
     engines: {node: '>=12.0.0'}
 
+  fast-diff@1.3.0:
+    resolution: {integrity: sha512-VxPP4NqbUjj6MaAOafWeUn2cXWLcCtljklUtZf0Ind4XQ+QPtmA0b18zZy0jIQx+ExRVCR/ZQpBmik5lXshNsw==}
+
   fast-sha256@1.3.0:
     resolution: {integrity: sha512-n11RGP/lrWEFI/bWdygLxhI+pVeo1ZYIVwvvPkW7azl/rOy+F3HYRZ2K5zeE9mmkhQppyv9sQFx0JM9UabnpPQ==}
 
@@ -2094,6 +2129,9 @@ packages:
     resolution: {integrity: sha512-5Hh7Y1wQbvY5ooGgPbDaL5iYLAPzMTUrjMulskHLH6wnv/A+1q5rgEaiuqEjB+oxGXIVZs1FF+R/KPN3ZSQYYg==}
     engines: {node: '>=12'}
 
+  isomorphic.js@0.2.5:
+    resolution: {integrity: sha512-PIeMbHqMt4DnUP3MA/Flc0HElYjMXArsw1qwJZcm9sqR8mq3l8NYizFMty0pWwE/tzIGH3EKK5+jes5mAr85yw==}
+
   jiti@2.7.0:
     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
     hasBin: true
@@ -2105,6 +2143,11 @@ packages:
   kleur@4.1.5:
     resolution: {integrity: sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ==}
     engines: {node: '>=6'}
+
+  lib0@0.2.119:
+    resolution: {integrity: sha512-vh+TiejVy8Xm+hCdnRfn9BthGNvNUZdEXltNjVZL3TzRIKP3s1lnQh8pWd/Q0wCgY0FPAGVVjFF4ZiHUV3LFgA==}
+    engines: {node: '>=16'}
+    hasBin: true
 
   lightningcss-android-arm64@1.32.0:
     resolution: {integrity: sha512-YK7/ClTt4kAK0vo6w3X+Pnm0D2cf2vPHbhOXdoNti1Ga0al1P4TBZhwjATvjNwLEBCnKvjJc2jQgHXH0NEwlAg==}
@@ -2751,6 +2794,16 @@ packages:
       utf-8-validate:
         optional: true
 
+  y-protocols@1.0.7:
+    resolution: {integrity: sha512-YSVsLoXxO67J6eE/nV4AtFtT3QEotZf5sK5BHxFBXso7VDUT3Tx07IfA6hsu5Q5OmBdMkQVmFZ9QOA7fikWvnw==}
+    engines: {node: '>=16.0.0', npm: '>=8.0.0'}
+    peerDependencies:
+      yjs: ^13.0.0
+
+  yjs@13.6.33:
+    resolution: {integrity: sha512-q/UYvr1gOk4XII+Cu1CW2dINjYqJJFifTzogEaIARznrvX7uOlHsdTEXcnOBMuIsrCGEEKdNxi74kyMLZlKVfw==}
+    engines: {node: '>=16.0.0', npm: '>=8.0.0'}
+
   youch-core@0.3.3:
     resolution: {integrity: sha512-ho7XuGjLaJ2hWHoK8yFnsUGy2Y5uDpqSTq1FkHLK4/oqKtyUU1AFbOOxY4IpC9f0fTLjwYbslUz0Po5BpD1wrA==}
 
@@ -2779,6 +2832,15 @@ packages:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
+
+  '@alexandernygard/collab@0.1.0(react@19.3.1)(yjs@13.6.33)':
+    dependencies:
+      fast-diff: 1.3.0
+      lib0: 0.2.119
+      y-protocols: 1.0.7(yjs@13.6.33)
+      yjs: 13.6.33
+    optionalDependencies:
+      react: 19.3.1
 
   '@alexandernygard/components@0.1.4(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@19.3.1)(react@19.3.1)(redux@5.0.1)':
     dependencies:
@@ -2886,6 +2948,8 @@ snapshots:
 
   '@cloudflare/workerd-windows-64@1.20261019.1':
     optional: true
+
+  '@cloudflare/workers-types@5.20261019.1': {}
 
   '@codemirror/autocomplete@6.20.3':
     dependencies:
@@ -4389,6 +4453,8 @@ snapshots:
 
   expect-type@1.4.0: {}
 
+  fast-diff@1.3.0: {}
+
   fast-sha256@1.3.0: {}
 
   fdir@6.5.0(picomatch@4.0.7):
@@ -4433,6 +4499,8 @@ snapshots:
 
   internmap@2.0.3: {}
 
+  isomorphic.js@0.2.5: {}
+
   jiti@2.7.0: {}
 
   json-schema-to-ts@3.1.1:
@@ -4441,6 +4509,10 @@ snapshots:
       ts-algebra: 2.0.0
 
   kleur@4.1.5: {}
+
+  lib0@0.2.119:
+    dependencies:
+      isomorphic.js: 0.2.5
 
   lightningcss-android-arm64@1.32.0:
     optional: true
@@ -5068,7 +5140,7 @@ snapshots:
       '@cloudflare/workerd-linux-arm64': 1.20261019.1
       '@cloudflare/workerd-windows-64': 1.20261019.1
 
-  wrangler@4.151.2:
+  wrangler@4.151.2(@cloudflare/workers-types@5.20261019.1):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.5.0
       '@cloudflare/unenv-preset': 2.16.2(unenv@2.0.0-rc.24)(workerd@1.20261019.1)
@@ -5079,6 +5151,7 @@ snapshots:
       unenv: 2.0.0-rc.24
       workerd: 1.20261019.1
     optionalDependencies:
+      '@cloudflare/workers-types': 5.20261019.1
       fsevents: 2.3.3
     transitivePeerDependencies:
       - '@types/node'
@@ -5086,6 +5159,15 @@ snapshots:
       - utf-8-validate
 
   ws@8.21.0: {}
+
+  y-protocols@1.0.7(yjs@13.6.33):
+    dependencies:
+      lib0: 0.2.119
+      yjs: 13.6.33
+
+  yjs@13.6.33:
+    dependencies:
+      lib0: 0.2.119
 
   youch-core@0.3.3:
     dependencies:

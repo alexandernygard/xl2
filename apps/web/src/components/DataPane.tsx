@@ -62,6 +62,7 @@ import {
   TypeIcon,
 } from "lucide-react"
 import { useStore } from "../store"
+import { useCollab } from "../collab"
 
 const FORMATS: { format: Format | null; label: string; example: string }[] = [
   { format: null, label: "Automatic", example: "" },
@@ -444,6 +445,16 @@ export function DataPane() {
   const [live, setLive] = React.useState<{ text: string; typed: boolean } | null>(null)
   const onEditingChange = React.useCallback((text: string | null, typed: boolean) => setLive(text === null ? null : { text, typed }), [])
   const names = React.useMemo(() => formulaNames(model), [model])
+  const peers = useCollab((s) => s.peers)
+  const gridPeers = React.useMemo(
+    () =>
+      peers.flatMap((p) =>
+        p.state.cell && p.state.cell.sheet === sheet?.name
+          ? [{ id: p.clientId, name: p.state.user.name, color: p.state.user.color, selection: { anchor: p.state.cell.anchor, focus: p.state.cell.focus } }]
+          : [],
+      ),
+    [peers, sheet?.name],
+  )
   const diff = useDiff()
   const scrollRequest = useStore((s) => s.scrollRequest)
   const sheetChanges = React.useMemo(() => diff?.sheets.find((d) => d.sheet === sheet?.name) ?? null, [diff, sheet?.name])
@@ -526,6 +537,7 @@ export function DataPane() {
           sheet={sheet}
           ctx={ctx}
           selection={selection}
+          peers={gridPeers}
           selectedBlock={selectedBlock}
           onSelect={select}
           onSelectBlock={selectBlock}

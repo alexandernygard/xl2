@@ -38,11 +38,14 @@ import {
   Columns2Icon,
   DownloadIcon,
   FileIcon,
+  CheckIcon,
+  CopyIcon,
   FilePlusIcon,
   MessageSquareIcon,
   Redo2Icon,
   SettingsIcon,
   TableIcon,
+  UsersIcon,
   Trash2Icon,
   Undo2Icon,
   UploadIcon,
@@ -51,6 +54,7 @@ import { MAIN, useStore, type View } from "./store"
 import { CodeEditor } from "./components/CodeEditor"
 import { DataPane } from "./components/DataPane"
 import { ChatPanel } from "./components/ChatPanel"
+import { closeRoom, newRoomId, openRoom, shareLink, useCollab } from "./collab"
 
 const MODELS = [
   { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
@@ -62,6 +66,26 @@ export function App() {
   const view = useStore((s) => s.view)
   const chatOpen = useStore((s) => s.chatOpen)
   const [settings, setSettings] = React.useState(false)
+  const activeId = useStore((s) => s.activeId)
+  const roomId = useStore((s) => s.files[s.activeId]?.roomId)
+
+  // A shared workbook keeps a live room open while it is the active one.
+  React.useEffect(() => {
+    if (!roomId) return
+    openRoom(activeId, roomId)
+    return closeRoom
+  }, [activeId, roomId])
+
+  // /?room=<id> joins someone's workbook (once; after that it is a file in your list).
+  React.useEffect(() => {
+    const id = new URLSearchParams(location.search).get("room")
+    if (!id) return
+    history.replaceState(null, "", location.pathname)
+    const s = useStore.getState()
+    const existing = s.order.find((f) => s.files[f].roomId === id)
+    if (existing) s.openFile(existing)
+    else s.newFile({ source: "", files: {} }, { roomId: id, name: "Shared workbook" })
+  }, [])
 
   React.useEffect(() => {
     useStore.getState().recompute()
@@ -149,8 +173,12 @@ function Header({ onOpenSettings }: { onOpenSettings: () => void }) {
   const view = useStore((s) => s.view)
   const chatOpen = useStore((s) => s.chatOpen)
   const name = useStore((s) => s.files[s.activeId]?.name)
-  const canUndo = useStore((s) => (s.history[s.activeId]?.past.length ?? 0) > 0)
-  const canRedo = useStore((s) => (s.history[s.activeId]?.future.length ?? 0) > 0)
+  const shared = useStore((s) => !!s.files[s.activeId]?.roomId)
+  const liveUndo = useCollab((s) => s.canUndo)
+  const liveRedo = useCollab((s) => s.canRedo)
+  const canUndo = useStore((s) => (s.history[s.activeId]?.past.length ?? 0) > 0) || (shared && liveUndo)
+  const canRedo = useStore((s) => (s.history[s.activeId]?.future.length ?? 0) > 0) || (shared && liveRedo)
+  const [sharing, setSharing] = React.useState(false)
   const { undo, redo, setView, setChatOpen } = useStore.getState()
 
   return (
@@ -194,6 +222,10 @@ function Header({ onOpenSettings }: { onOpenSettings: () => void }) {
             <CodeIcon /> Code
           </ToggleGroupItem>
         </ToggleGroup>
+        <Peers />
+        <Button size="sm" variant={shared ? "secondary" : "ghost"} onClick={() => setSharing(true)}>
+          <UsersIcon /> Share
+        </Button>
         <Button size="sm" variant={chatOpen ? "secondary" : "ghost"} onClick={() => setChatOpen(!chatOpen)} aria-pressed={chatOpen}>
           <MessageSquareIcon /> Assistant
         </Button>
@@ -201,7 +233,96 @@ function Header({ onOpenSettings }: { onOpenSettings: () => void }) {
           <SettingsIcon />
         </Button>
       </div>
+      <ShareDialog open={sharing} onOpenChange={setSharing} />
     </header>
+  )
+}
+
+/** Who else is in this workbook, and whether we are connected. */
+function Peers() {
+  const roomId = useCollab((s) => s.roomId)
+  const status = useCollab((s) => s.status)
+  const peers = useCollab((s) => s.peers)
+  if (!roomId) return null
+  const dot = status === "live" ? "bg-success" : status === "connecting" ? "bg-warning" : "bg-destructive"
+  const label = status === "live" ? "Live" : status === "connecting" ? "Connecting…" : status === "failed" ? "Can't connect" : "Offline, changes will sync when you reconnect"
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex -space-x-1.5">
+        {peers.slice(0, 5).map((p) => (
+          <Tooltip key={p.clientId}>
+            <TooltipTrigger asChild>
+              <span
+                className="flex size-6 items-center justify-center rounded-full border-2 border-card text-[10px] font-medium text-white"
+                style={{ background: p.state.user.color }}
+              >
+                {p.state.user.name.slice(0, 1).toUpperCase()}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>{p.state.user.name}</TooltipContent>
+          </Tooltip>
+        ))}
+        {peers.length > 5 && <span className="flex size-6 items-center justify-center rounded-full border-2 border-card bg-muted text-[10px]">+{peers.length - 5}</span>}
+      </div>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className={cn("size-2 rounded-full", dot)} /> {status === "live" ? (peers.length ? `${peers.length + 1} here` : "Live") : label.split(",")[0]}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
+    </div>
+  )
+}
+
+function ShareDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+  const activeId = useStore((s) => s.activeId)
+  const roomId = useStore((s) => s.files[s.activeId]?.roomId)
+  const name = useCollab((s) => s.name)
+  const failure = useCollab((s) => s.failure)
+  const [copied, setCopied] = React.useState(false)
+  const link = roomId ? shareLink(roomId) : ""
+  const copy = async () => {
+    await navigator.clipboard.writeText(link)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Share this workbook</DialogTitle>
+          <DialogDescription>
+            {roomId
+              ? "Anyone with this link can open the workbook and edit it live with you. There are no accounts yet, so only share it with people you trust."
+              : "Make this workbook live: others join from a link and you edit together, with each other's cursors visible."}
+          </DialogDescription>
+        </DialogHeader>
+        {failure && <p className="text-sm text-destructive">{failure}</p>}
+        {roomId ? (
+          <div className="flex gap-2">
+            <Input readOnly value={link} onFocus={(e) => e.currentTarget.select()} aria-label="Share link" />
+            <Button variant="outline" onClick={copy}>
+              {copied ? <CheckIcon /> : <CopyIcon />} {copied ? "Copied" : "Copy"}
+            </Button>
+          </div>
+        ) : null}
+        <div className="grid gap-1.5">
+          <Label htmlFor="collab-name">Your name</Label>
+          <Input id="collab-name" value={name} onChange={(e) => useCollab.getState().setName(e.target.value)} placeholder="Shown next to your cursor" />
+        </div>
+        <DialogFooter>
+          {roomId ? (
+            <Button variant="outline" onClick={() => (useStore.getState().setRoom(activeId, undefined), onOpenChange(false))}>
+              Stop sharing
+            </Button>
+          ) : (
+            <Button onClick={() => useStore.getState().setRoom(activeId, newRoomId())}>Start sharing</Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

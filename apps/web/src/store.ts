@@ -27,7 +27,7 @@ import { evaluateBundle, type EvalError, type EvalResult } from "./evaluator"
 // it in a worker after every change.
 
 export type View = "data" | "split" | "code"
-export type Origin = "editor" | "grid" | "ai" | "system"
+export type Origin = "editor" | "grid" | "ai" | "system" | "remote"
 
 /** The workbook code's name inside a bundle, next to data files like "sales.csv". */
 export const MAIN = "main"
@@ -38,6 +38,8 @@ export interface FileDoc {
   source: string
   files: Record<string, string>
   updatedAt: number
+  /** Set while the workbook is shared: the id of its live-collaboration room. */
+  roomId?: string
   /** Claude's changes awaiting review. The bundle above already includes them. */
   draft?: Draft
 }
@@ -145,7 +147,9 @@ interface State {
   setApiKey(k: string): void
   setAiModel(m: string): void
   setCodeFile(f: string): void
-  newFile(bundle: Bundle): void
+  newFile(bundle: Bundle, opts?: { roomId?: string; name?: string }): void
+  /** Share the active workbook (or stop sharing it). */
+  setRoom(fileId: string, roomId: string | undefined): void
   openFile(id: string): void
   deleteFile(id: string): void
 }
@@ -153,6 +157,9 @@ interface State {
 export type StepResult = { ok: true; stepId?: string; result: EvalResult } | { ok: false; error: string }
 
 const uid = () => Math.random().toString(36).slice(2, 10)
+
+/** Live collaboration replaces snapshot undo while a workbook is shared (see collab.ts). */
+export const collabHooks: { undo?: () => void; redo?: () => void } = {}
 
 /** File text before each of your code-editor steps, so typing coalesces into one step. */
 const editorBefore = new Map<string, { file: string; text: string }>()
@@ -336,12 +343,16 @@ export const useStore = create<State>()(
             }
             const op = bundleOp(cur, bundle)
             if (!op) return lastEval
-            const step: DraftStep = { id: uid(), author: "user", label: origin === "editor" ? `Edited ${changed === MAIN ? "code" : changed}` : "Your edit", op, status: "accepted", at: Date.now() }
+            const step: DraftStep = { id: uid(), author: "user", label: origin === "remote" ? "A collaborator's edit" : origin === "editor" ? `Edited ${changed === MAIN ? "code" : changed}` : "Your edit", op, status: "accepted", at: Date.now() }
             if (origin === "editor" && changed) editorBefore.set(step.id, { file: changed, text: changed === MAIN ? cur.source : cur.files[changed] })
             writeDraft({ ...draft, steps: [...draft.steps, step] }, bundle, origin !== "editor")
             return schedule()
           }
           const h = get().history[activeId] ?? { past: [], future: [], lastPush: 0 }
+          if (origin === "remote") {
+            write(bundle, h, true)
+            return schedule()
+          }
           const now = Date.now()
           // typing in the editor coalesces into one undo step
           const coalesce = origin === "editor" && h.lastOrigin === "editor" && now - h.lastPush < COALESCE_MS
@@ -441,6 +452,7 @@ export const useStore = create<State>()(
             }
             return
           }
+          if (get().files[activeId]?.roomId && collabHooks.undo) return collabHooks.undo()
           const h = history[activeId]
           if (!h?.past.length) return
           const prev = h.past[h.past.length - 1]
@@ -451,6 +463,7 @@ export const useStore = create<State>()(
         redo() {
           if (get().draft()) return
           const { activeId, history } = get()
+          if (get().files[activeId]?.roomId && collabHooks.redo) return collabHooks.redo()
           const h = history[activeId]
           if (!h?.future.length) return
           const [next, ...rest] = h.future
@@ -500,10 +513,14 @@ export const useStore = create<State>()(
         setAiModel: (aiModel) => set({ aiModel }),
         setCodeFile: (codeFile) => set({ codeFile }),
 
-        newFile(bundle) {
+        setRoom(fileId, roomId) {
+          set((s) => (s.files[fileId] ? { files: { ...s.files, [fileId]: { ...s.files[fileId], roomId } } } : s))
+        },
+
+        newFile(bundle, opts) {
           const id = uid()
           set((s) => ({
-            files: { ...s.files, [id]: { id, name: "Untitled", source: bundle.source, files: bundle.files, updatedAt: Date.now() } },
+            files: { ...s.files, [id]: { id, name: opts?.name ?? "Untitled", source: bundle.source, files: bundle.files, updatedAt: Date.now(), roomId: opts?.roomId } },
             order: [...s.order, id],
             activeId: id,
             activeSheet: 0,
