@@ -19,8 +19,9 @@ import { collabHooks, MAIN, useStore, type FileDoc } from "./store"
 export const drive = getDrive()
 
 // Live collaboration for the active workbook. A workbook in Drive (drive.nyggis.com) connects to the
-// drive's room with a ticket that carries the person's access; a workbook shared by link uses this
-// app's own Worker, where knowing the id is the permission.
+// drive's room with a ticket that carries the person's access. Workbooks shared by link before Drive
+// existed still connect to this app's own Worker, where knowing the id is the permission; new sharing
+// always goes through Drive, which needs an account.
 // The Y.Doc holds the bundle as named texts: "main" is the
 // workbook code, every other key is a CSV data file. The store stays the source the rest of the app reads;
 // bindFiles keeps the two equal, and edits from others arrive through setBundle(…, "remote").
@@ -37,8 +38,6 @@ interface CollabState {
   peers: Peer<XlPresence>[]
   canUndo: boolean
   canRedo: boolean
-  name: string
-  setName(name: string): void
   /** The Drive file, as of the last ticket (name, sharing, your role). */
   driveItem: Item | null
   /** View-only access to a Drive file. */
@@ -47,33 +46,16 @@ interface CollabState {
   needsSignIn: boolean
 }
 
-const NAME_KEY = "xl2.name"
-const loadName = () => {
-  try {
-    return localStorage.getItem(NAME_KEY) || `Guest ${100 + Math.floor(Math.random() * 900)}`
-  } catch {
-    return "Guest"
-  }
-}
-
-export const useCollab = create<CollabState>()((set) => ({
+export const useCollab = create<CollabState>()(() => ({
   roomId: null,
   status: "off",
   failure: null,
   peers: [],
   canUndo: false,
   canRedo: false,
-  name: loadName(),
   driveItem: null,
   readOnly: false,
   needsSignIn: false,
-  setName(name) {
-    set({ name })
-    try {
-      localStorage.setItem(NAME_KEY, name)
-    } catch {}
-    session?.provider && setPresence(session.provider.awareness, { user: me() })
-  },
 }))
 
 // One id per browser tab, so your own other tabs show up as separate people.
@@ -81,17 +63,8 @@ const tabId = Math.random().toString(36).slice(2, 8)
 let account: Me | null = null
 const me = () => {
   if (account) return { name: account.name || account.email, color: colorFor(account.id), id: account.id, picture: account.picture, email: account.email }
-  const name = useCollab.getState().name
-  return { name, color: colorFor(tabId), id: tabId }
+  return { name: "Guest", color: colorFor(tabId), id: tabId }
 }
-
-/** 22 random base64url characters (128 bits). Knowing the id is the permission to edit. */
-export function newRoomId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16))
-  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
-}
-
-export const shareLink = (roomId: string) => `${location.origin}/?room=${roomId}`
 
 const toFiles = (f: Pick<FileDoc, "source" | "files">): TextFiles => ({ [MAIN]: f.source, ...f.files })
 const fromFiles = (t: TextFiles) => {

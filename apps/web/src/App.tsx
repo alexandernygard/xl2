@@ -38,8 +38,6 @@ import {
   Columns2Icon,
   DownloadIcon,
   FileIcon,
-  CheckIcon,
-  CopyIcon,
   FilePlusIcon,
   MessageSquareIcon,
   Redo2Icon,
@@ -50,13 +48,13 @@ import {
   Undo2Icon,
   UploadIcon,
 } from "lucide-react"
-import { MAIN, useStore, type View } from "./store"
+import { MAIN, startTab, useStore, type View } from "./store"
 import { CodeEditor } from "./components/CodeEditor"
 import { DataPane } from "./components/DataPane"
 import { ChatPanel } from "./components/ChatPanel"
-import { fileFromUrl } from "@alexandernygard/drive"
-import { DriveFileButton, DriveLogo } from "@alexandernygard/drive/react"
-import { closeRoom, drive, newRoomId, openDriveFile, openRoom, saveToDrive, shareLink, useCollab } from "./collab"
+import { fileFromUrl, type Item } from "@alexandernygard/drive"
+import { DriveFileButton, DriveLogo, ShareDialog as DriveShareDialog, useDriveUser } from "@alexandernygard/drive/react"
+import { closeRoom, drive, openDriveFile, openRoom, saveToDrive, useCollab } from "./collab"
 
 const MODELS = [
   { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
@@ -82,6 +80,7 @@ export function App() {
   // reload or a copied link opens it again.
   React.useEffect(() => {
     const id = fileFromUrl()
+    startTab(!!id || new URLSearchParams(location.search).has("room"))
     if (id) openDriveFile(id)
   }, [])
   const driveFile = useStore((s) => (s.files[s.activeId]?.drive ? s.files[s.activeId]?.roomId : undefined))
@@ -199,6 +198,8 @@ function Header({ onOpenSettings }: { onOpenSettings: () => void }) {
   const canUndo = useStore((s) => (s.history[s.activeId]?.past.length ?? 0) > 0) || (shared && liveUndo)
   const canRedo = useStore((s) => (s.history[s.activeId]?.future.length ?? 0) > 0) || (shared && liveRedo)
   const [sharing, setSharing] = React.useState(false)
+  // A workbook just saved to Drive opens straight in Drive's share dialog.
+  const [saved, setSaved] = React.useState<Item | null>(null)
   const { undo, redo, setView, setChatOpen } = useStore.getState()
 
   return (
@@ -267,7 +268,15 @@ function Header({ onOpenSettings }: { onOpenSettings: () => void }) {
           <SettingsIcon />
         </Button>
       </div>
-      <ShareDialog open={sharing} onOpenChange={setSharing} />
+      <ShareDialog open={sharing} onOpenChange={setSharing} onSaved={setSaved} />
+      <DriveShareDialog
+        itemId={saved?.id ?? ""}
+        initial={saved}
+        open={!!saved}
+        onOpenChange={(o) => !o && setSaved(null)}
+        onChange={(item) => useCollab.setState({ driveItem: item })}
+        drive={drive}
+      />
     </header>
   )
 }
@@ -310,17 +319,31 @@ function Peers({ status: statusOnly = false }: { status?: boolean }) {
   )
 }
 
-function ShareDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+/**
+ * Share for a workbook that isn't in Drive: sharing needs an account, so it saves the workbook to Drive,
+ * where you add people by email. Signed out, it asks you to sign in first.
+ */
+function ShareDialog({ open, onOpenChange, onSaved }: { open: boolean; onOpenChange: (o: boolean) => void; onSaved: (item: Item) => void }) {
   const activeId = useStore((s) => s.activeId)
-  const roomId = useStore((s) => s.files[s.activeId]?.roomId)
-  const name = useCollab((s) => s.name)
-  const failure = useCollab((s) => s.failure)
-  const [copied, setCopied] = React.useState(false)
-  const link = roomId ? shareLink(roomId) : ""
-  const copy = async () => {
-    await navigator.clipboard.writeText(link)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
+  // Shared by link before Drive: anyone with the link can still edit until it's saved to Drive or stopped.
+  const linkRoom = useStore((s) => (s.files[s.activeId]?.drive ? undefined : s.files[s.activeId]?.roomId))
+  const user = useDriveUser(drive)
+  const [saving, setSaving] = React.useState(false)
+  const signedOut = user.status === "signed-out"
+  const save = () => {
+    setSaving(true)
+    saveToDrive(activeId).then(
+      (item) => {
+        setSaving(false)
+        onOpenChange(false)
+        onSaved(item)
+      },
+      (e) => {
+        setSaving(false)
+        if (e?.signedOut) location.href = drive.loginUrl()
+        else toast.error(e?.message ?? "Couldn't save to Drive")
+      },
+    )
   }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -328,52 +351,35 @@ function ShareDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: 
         <DialogHeader>
           <DialogTitle>Share this workbook</DialogTitle>
           <DialogDescription>
-            {roomId
-              ? "Anyone with this link can open the workbook and edit it live with you. There are no accounts yet, so only share it with people you trust."
-              : "Make this workbook live: others join from a link and you edit together, with each other's cursors visible."}
+            {signedOut ? "Sign in to share. " : ""}Sharing saves the workbook to Drive, where you add people by email and choose who can edit.
           </DialogDescription>
         </DialogHeader>
-        {failure && <p className="text-sm text-destructive">{failure}</p>}
-        <div className="flex items-start gap-3 rounded-xl border bg-muted/40 p-3">
-          <DriveLogo size={28} className="mt-0.5 shrink-0" />
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium">Save to Drive</p>
-            <p className="text-xs text-muted-foreground">Share with people by email, choose who can edit, and find it with all your files at drive.nyggis.com.</p>
-          </div>
-          <Button
-            size="sm"
-            onClick={() =>
-              saveToDrive(activeId).then(
-                () => {
-                  onOpenChange(false)
-                  toast.success("Saved to Drive", { description: "Use Share to add people." })
-                },
-                (e) => (e?.signedOut ? (location.href = drive.loginUrl()) : toast.error(e?.message ?? "Couldn't save to Drive")),
-              )
-            }
-          >
-            Save
-          </Button>
+        <div className="flex items-center gap-3 rounded-xl border bg-muted/40 p-3">
+          <DriveLogo size={28} className="shrink-0" />
+          <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+            {signedOut ? "With a Nyggis account, your workbooks are kept in Drive and open from any device." : "You'll find it with all your files at drive.nyggis.com."}
+          </p>
         </div>
-        {roomId ? (
-          <div className="flex gap-2">
-            <Input readOnly value={link} onFocus={(e) => e.currentTarget.select()} aria-label="Share link" />
-            <Button variant="outline" onClick={copy}>
-              {copied ? <CheckIcon /> : <CopyIcon />} {copied ? "Copied" : "Copy"}
-            </Button>
-          </div>
-        ) : null}
-        <div className="grid gap-1.5">
-          <Label htmlFor="collab-name">Your name</Label>
-          <Input id="collab-name" value={name} onChange={(e) => useCollab.getState().setName(e.target.value)} placeholder="Shown next to your cursor" />
-        </div>
+        {linkRoom && (
+          <p className="text-sm text-muted-foreground">
+            This workbook is also shared by an older link that anyone can edit. Saving it to Drive turns that link off.{" "}
+            <button className="font-medium text-foreground underline underline-offset-2" onClick={() => (useStore.getState().setRoom(activeId, undefined), onOpenChange(false))}>
+              Turn it off now
+            </button>
+          </p>
+        )}
         <DialogFooter>
-          {roomId ? (
-            <Button variant="outline" onClick={() => (useStore.getState().setRoom(activeId, undefined), onOpenChange(false))}>
-              Stop sharing
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          {signedOut ? (
+            <Button asChild>
+              <a href={drive.loginUrl()}>Sign in</a>
             </Button>
           ) : (
-            <Button onClick={() => useStore.getState().setRoom(activeId, newRoomId())}>Start sharing</Button>
+            <Button disabled={user.status === "loading" || saving} onClick={save}>
+              {saving ? "Saving…" : "Save to Drive and share"}
+            </Button>
           )}
         </DialogFooter>
       </DialogContent>

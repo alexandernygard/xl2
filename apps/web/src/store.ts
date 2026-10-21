@@ -6,7 +6,7 @@ import {
   bundleOp,
   cellAt,
   diffModels,
-  examples,
+  blankExample,
   locate,
   parseAddress,
   replay,
@@ -199,14 +199,8 @@ function describe(intents: EditIntent[]): string {
   }
 }
 function initialFiles() {
-  const files: Record<string, FileDoc> = {}
-  const order: string[] = []
-  for (const ex of examples.filter((e) => e.id !== "blank")) {
-    const id = uid()
-    files[id] = { id, name: ex.name, source: ex.source, files: { ...ex.files }, updatedAt: Date.now() }
-    order.push(id)
-  }
-  return { files, order, activeId: order[0] }
+  const id = uid()
+  return { files: { [id]: { id, name: "Untitled", source: blankExample, files: {}, updatedAt: Date.now() } }, order: [id], activeId: id }
 }
 
 const COALESCE_MS = 1200
@@ -582,3 +576,27 @@ export const useStore = create<State>()(
     },
   ),
 )
+
+const TAB_KEY = "xl2.tab"
+
+/**
+ * A new tab starts on an empty workbook (an untouched one if there is one, so they don't pile up); a
+ * reload keeps the workbook you were in. Earlier workbooks stay in the menu. Call once, at startup;
+ * `opening` is true when the address opens a particular workbook.
+ */
+export function startTab(opening: boolean) {
+  try {
+    if (sessionStorage.getItem(TAB_KEY)) return
+    sessionStorage.setItem(TAB_KEY, "1")
+  } catch {
+    return
+  }
+  if (opening) return
+  const s = useStore.getState()
+  const blank = s.order.find((id) => {
+    const f = s.files[id]
+    return !f.roomId && f.source === blankExample && Object.keys(f.files).length === 0
+  })
+  if (blank) s.openFile(blank)
+  else s.newFile({ source: blankExample, files: {} })
+}

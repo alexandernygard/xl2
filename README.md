@@ -8,11 +8,11 @@ pnpm dev        # http://localhost:5199
 pnpm test       # SDK tests
 ```
 
-Add your Anthropic API key under Settings (gear icon) to use the assistant. It stays in the browser's localStorage and is only sent to api.anthropic.com. Workbooks live in your browser; the only server code is the optional live-collaboration Worker (below).
+Add your Anthropic API key under Settings (gear icon) to use the assistant. It stays in the browser's localStorage and is only sent to api.anthropic.com. Workbooks live in your browser. A new tab starts on an empty workbook; a reload keeps the one you were in, and earlier ones stay in the file menu.
 
 ### Sharing a workbook live
 
-Share in the header makes the workbook live: others open the link and edit together, with each other's selections visible. The workbook code and CSVs sync through a Durable Object (`apps/worker`, built on `@alexandernygard/collab`). Anyone with the link can edit; there are no accounts yet.
+Share in the header needs a Nyggis account: it saves the workbook to Drive, where you add people by email and choose who can edit, and you edit together with each other's selections visible. Workbooks shared by link before Drive still sync through this app's Durable Object (`apps/worker`, built on `@alexandernygard/collab`) until they're saved to Drive or the link is turned off; new link sharing is gone.
 
 ```bash
 pnpm dev:worker   # Worker + Durable Object on :8789 (vite proxies /collab to it)
