@@ -30,7 +30,8 @@
     "typescript": "~5.9.3",
     "zustand": "^5.0.15",
     "@alexandernygard/collab": "^0.1.0",
-    "yjs": "^13.6.33"
+    "yjs": "^13.6.33",
+    "@alexandernygard/drive": "link:../../../drive/packages/drive"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

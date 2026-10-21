@@ -15,9 +15,13 @@ Add your Anthropic API key under Settings (gear icon) to use the assistant. It s
 Share in the header makes the workbook live: others open the link and edit together, with each other's selections visible. The workbook code and CSVs sync through a Durable Object (`apps/worker`, built on `@alexandernygard/collab`). Anyone with the link can edit; there are no accounts yet.
 
 ```bash
-pnpm dev:worker   # Worker + Durable Object on :8787 (vite proxies /collab to it)
+pnpm dev:worker   # Worker + Durable Object on :8789 (vite proxies /collab to it)
 pnpm dev          # the app
 ```
+
+### Drive
+
+Workbooks in [Drive](../drive) (drive.nyggis.com) open here as `/?file=<id>` and sync through the drive's rooms instead of this app's Worker, so sharing follows Drive: people you add by email, as viewers or editors, with Nyggis accounts. The header shows who else is in the file and Drive's share dialog. *Save to Drive* (in Share) moves a local workbook there. Locally, run the drive (`pnpm dev:worker` in `../drive`) and the auth Worker (:8787).
 
 ## Packages
 

@@ -2,6 +2,8 @@
 @import "@alexandernygard/components/theme.css";
 
 @source "../../../packages/viz/src";
+/* The share dialog and avatars from Drive. */
+@source "../node_modules/@alexandernygard/drive/src";
 
 html,
 body,

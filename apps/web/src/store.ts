@@ -40,6 +40,8 @@ export interface FileDoc {
   updatedAt: number
   /** Set while the workbook is shared: the id of its live-collaboration room. */
   roomId?: string
+  /** The room is a file in Drive (drive.nyggis.com): roomId is its id, access follows its sharing, and Drive owns its name. */
+  drive?: boolean
   /** Claude's changes awaiting review. The bundle above already includes them. */
   draft?: Draft
 }
@@ -147,9 +149,10 @@ interface State {
   setApiKey(k: string): void
   setAiModel(m: string): void
   setCodeFile(f: string): void
-  newFile(bundle: Bundle, opts?: { roomId?: string; name?: string }): void
-  /** Share the active workbook (or stop sharing it). */
-  setRoom(fileId: string, roomId: string | undefined): void
+  newFile(bundle: Bundle, opts?: { roomId?: string; drive?: boolean; name?: string }): void
+  /** Share the active workbook (or stop sharing it). `drive`: the room is a Drive file. */
+  setRoom(fileId: string, roomId: string | undefined, drive?: boolean): void
+  renameFile(fileId: string, name: string): void
   openFile(id: string): void
   deleteFile(id: string): void
 }
@@ -231,7 +234,7 @@ export const useStore = create<State>()(
               model: r.ok ? r.model : s.model,
               error: r.ok ? null : r.error,
               activeSheet: r.ok ? Math.min(s.activeSheet, Math.max(0, r.model.sheets.length - 1)) : s.activeSheet,
-              files: r.ok && file && file.name !== r.model.name ? { ...s.files, [fileId]: { ...file, name: r.model.name } } : s.files,
+              files: r.ok && file && !file.drive && file.name !== r.model.name ? { ...s.files, [fileId]: { ...file, name: r.model.name } } : s.files,
             }
           })
           return r
@@ -513,14 +516,18 @@ export const useStore = create<State>()(
         setAiModel: (aiModel) => set({ aiModel }),
         setCodeFile: (codeFile) => set({ codeFile }),
 
-        setRoom(fileId, roomId) {
-          set((s) => (s.files[fileId] ? { files: { ...s.files, [fileId]: { ...s.files[fileId], roomId } } } : s))
+        setRoom(fileId, roomId, drive) {
+          set((s) => (s.files[fileId] ? { files: { ...s.files, [fileId]: { ...s.files[fileId], roomId, drive: roomId ? drive : undefined } } } : s))
+        },
+
+        renameFile(fileId, name) {
+          set((s) => (s.files[fileId] && s.files[fileId].name !== name ? { files: { ...s.files, [fileId]: { ...s.files[fileId], name } } } : s))
         },
 
         newFile(bundle, opts) {
           const id = uid()
           set((s) => ({
-            files: { ...s.files, [id]: { id, name: opts?.name ?? "Untitled", source: bundle.source, files: bundle.files, updatedAt: Date.now(), roomId: opts?.roomId } },
+            files: { ...s.files, [id]: { id, name: opts?.name ?? "Untitled", source: bundle.source, files: bundle.files, updatedAt: Date.now(), roomId: opts?.roomId, drive: opts?.drive } },
             order: [...s.order, id],
             activeId: id,
             activeSheet: 0,

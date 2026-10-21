@@ -45,8 +45,10 @@ function tsEnv(): Plugin {
 export default defineConfig({
   plugins: [react(), tailwindcss(), tsEnv()],
   // Yjs breaks if two copies are loaded; make sure collab and the app share one.
-  resolve: { dedupe: ["yjs", "lib0", "y-protocols"] },
+  // React and the component library too: @alexandernygard/drive's share dialog must use the app's copies.
+  resolve: { dedupe: ["yjs", "lib0", "y-protocols", "react", "react-dom", "@alexandernygard/components", "lucide-react"] },
   worker: { format: "es", plugins: () => [tsEnv()] },
-  // Shared workbooks talk to the Worker's Durable Objects; `pnpm dev:worker` serves them on :8787.
-  server: { port: 5199, proxy: { "/collab": { target: "http://localhost:8787", ws: true } } },
+  // Link-shared workbooks talk to the Worker's Durable Objects; `pnpm dev:worker` serves them on :8789
+  // (8787 is the local auth Worker). Drive workbooks connect to the drive instead.
+  server: { port: 5199, proxy: { "/collab": { target: "http://localhost:8789", ws: true } } },
 })

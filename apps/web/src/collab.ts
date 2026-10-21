@@ -13,9 +13,15 @@ import {
   type Peer,
   type TextFiles,
 } from "@alexandernygard/collab"
+import { DriveError, deniedMessage, getDrive, template, type Item, type Me } from "@alexandernygard/drive"
 import { collabHooks, MAIN, useStore, type FileDoc } from "./store"
 
-// Live collaboration for the active workbook. The Y.Doc holds the bundle as named texts: "main" is the
+export const drive = getDrive()
+
+// Live collaboration for the active workbook. A workbook in Drive (drive.nyggis.com) connects to the
+// drive's room with a ticket that carries the person's access; a workbook shared by link uses this
+// app's own Worker, where knowing the id is the permission.
+// The Y.Doc holds the bundle as named texts: "main" is the
 // workbook code, every other key is a CSV data file. The store stays the source the rest of the app reads;
 // bindFiles keeps the two equal, and edits from others arrive through setBundle(…, "remote").
 
@@ -33,6 +39,12 @@ interface CollabState {
   canRedo: boolean
   name: string
   setName(name: string): void
+  /** The Drive file, as of the last ticket (name, sharing, your role). */
+  driveItem: Item | null
+  /** View-only access to a Drive file. */
+  readOnly: boolean
+  /** The ticket was refused because nobody is signed in. */
+  needsSignIn: boolean
 }
 
 const NAME_KEY = "xl2.name"
@@ -52,6 +64,9 @@ export const useCollab = create<CollabState>()((set) => ({
   canUndo: false,
   canRedo: false,
   name: loadName(),
+  driveItem: null,
+  readOnly: false,
+  needsSignIn: false,
   setName(name) {
     set({ name })
     try {
@@ -63,7 +78,9 @@ export const useCollab = create<CollabState>()((set) => ({
 
 // One id per browser tab, so your own other tabs show up as separate people.
 const tabId = Math.random().toString(36).slice(2, 8)
+let account: Me | null = null
 const me = () => {
+  if (account) return { name: account.name || account.email, color: colorFor(account.id), id: account.id, picture: account.picture, email: account.email }
   const name = useCollab.getState().name
   return { name, color: colorFor(tabId), id: tabId }
 }
@@ -93,7 +110,30 @@ interface Session {
 let session: Session | null = null
 
 function start(fileId: string, roomId: string): Session {
-  const provider = new CollabProvider({ url: collabUrl(roomId) })
+  const onDrive = !!useStore.getState().files[fileId]?.drive
+  let provider!: CollabProvider
+  const options = onDrive
+    ? drive.roomOptions(
+        roomId,
+        (t) => {
+          useCollab.setState({ driveItem: t.item, readOnly: t.readOnly, needsSignIn: false, failure: null })
+          useStore.getState().renameFile(fileId, t.item.name)
+        },
+        (e: DriveError) => {
+          useCollab.setState({ failure: deniedMessage(e), needsSignIn: e.status === 401 })
+          setTimeout(() => provider.disconnect())
+        },
+      )
+    : { url: collabUrl(roomId) }
+  provider = new CollabProvider(options)
+  if (onDrive)
+    void drive.me().then(
+      (m) => {
+        account = m
+        setPresence(provider.awareness, { user: me() })
+      },
+      () => {},
+    )
   const ydoc = provider.doc
   const map = filesMap(ydoc)
   const undoManager = createUndoManager(map)
@@ -110,7 +150,12 @@ function start(fileId: string, roomId: string): Session {
   const bind = () => {
     // Called once, after the first sync, so nothing is pushed on top of content we have not received yet.
     const f = file()
-    if (map.size === 0 && f && (f.source || Object.keys(f.files).length)) {
+    if (map.size === 0 && onDrive) {
+      // A Drive file the drive couldn't seed: start from the blank workbook.
+      ydoc.transact(() => {
+        for (const [name, text] of Object.entries(template("sheet", f?.name ?? "Untitled").files!)) map.set(name, new Y.Text(text))
+      }, "seed")
+    } else if (map.size === 0 && f && (f.source || Object.keys(f.files).length)) {
       // A new room: the creator's copy becomes the document.
       ydoc.transact(() => {
         for (const [name, text] of Object.entries(toFiles(f))) map.set(name, new Y.Text(text))
@@ -175,7 +220,7 @@ function start(fileId: string, roomId: string): Session {
       for (const c of cleanups) c()
       undoManager.destroy()
       provider.destroy()
-      useCollab.setState({ roomId: null, status: "off", peers: [], failure: null, canUndo: false, canRedo: false })
+      useCollab.setState({ roomId: null, status: "off", peers: [], failure: null, canUndo: false, canRedo: false, driveItem: null, readOnly: false, needsSignIn: false })
     },
   }
 }
@@ -193,3 +238,20 @@ export function closeRoom() {
 
 collabHooks.undo = () => session?.undo()
 collabHooks.redo = () => session?.redo()
+
+/** Put a local workbook in Drive: it becomes a Drive file you can share with people, and this copy follows it. */
+export async function saveToDrive(fileId: string): Promise<Item> {
+  const f = useStore.getState().files[fileId]
+  if (!f) throw new Error("No such workbook")
+  const item = await drive.create({ kind: "sheet", name: f.name, content: { files: toFiles(f) } })
+  useStore.getState().setRoom(fileId, item.id, true)
+  return item
+}
+
+/** Open a Drive file from `?file=<id>`: the local copy if there is one, else a new one that fills in from the room. */
+export function openDriveFile(id: string) {
+  const s = useStore.getState()
+  const existing = s.order.find((f) => s.files[f].drive && s.files[f].roomId === id)
+  if (existing) s.openFile(existing)
+  else s.newFile({ source: "", files: {} }, { roomId: id, drive: true, name: "Opening…" })
+}

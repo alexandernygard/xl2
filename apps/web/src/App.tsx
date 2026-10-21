@@ -54,7 +54,9 @@ import { MAIN, useStore, type View } from "./store"
 import { CodeEditor } from "./components/CodeEditor"
 import { DataPane } from "./components/DataPane"
 import { ChatPanel } from "./components/ChatPanel"
-import { closeRoom, newRoomId, openRoom, shareLink, useCollab } from "./collab"
+import { fileFromUrl } from "@alexandernygard/drive"
+import { DriveFileButton, DriveLogo } from "@alexandernygard/drive/react"
+import { closeRoom, drive, newRoomId, openDriveFile, openRoom, saveToDrive, shareLink, useCollab } from "./collab"
 
 const MODELS = [
   { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
@@ -75,6 +77,20 @@ export function App() {
     openRoom(activeId, roomId)
     return closeRoom
   }, [activeId, roomId])
+
+  // /?file=<id> opens a workbook from Drive. The address keeps it while it's the active workbook, so a
+  // reload or a copied link opens it again.
+  React.useEffect(() => {
+    const id = fileFromUrl()
+    if (id) openDriveFile(id)
+  }, [])
+  const driveFile = useStore((s) => (s.files[s.activeId]?.drive ? s.files[s.activeId]?.roomId : undefined))
+  React.useEffect(() => {
+    const url = new URL(location.href)
+    if (driveFile) url.searchParams.set("file", driveFile)
+    else url.searchParams.delete("file")
+    if (url.href !== location.href) history.replaceState(null, "", url)
+  }, [driveFile])
 
   // /?room=<id> joins someone's workbook (once; after that it is a file in your list).
   React.useEffect(() => {
@@ -107,6 +123,7 @@ export function App() {
   return (
     <div className="flex h-full flex-col">
       <Header onOpenSettings={() => setSettings(true)} />
+      <DriveNotice />
       <ResizablePanelGroup key={layout} orientation="horizontal" className="min-h-0 flex-1">
         {chatOpen && (
           <>
@@ -174,6 +191,9 @@ function Header({ onOpenSettings }: { onOpenSettings: () => void }) {
   const chatOpen = useStore((s) => s.chatOpen)
   const name = useStore((s) => s.files[s.activeId]?.name)
   const shared = useStore((s) => !!s.files[s.activeId]?.roomId)
+  const driveId = useStore((s) => (s.files[s.activeId]?.drive ? s.files[s.activeId]?.roomId : undefined))
+  const driveItem = useCollab((s) => s.driveItem)
+  const peers = useCollab((s) => s.peers)
   const liveUndo = useCollab((s) => s.canUndo)
   const liveRedo = useCollab((s) => s.canRedo)
   const canUndo = useStore((s) => (s.history[s.activeId]?.past.length ?? 0) > 0) || (shared && liveUndo)
@@ -222,10 +242,24 @@ function Header({ onOpenSettings }: { onOpenSettings: () => void }) {
             <CodeIcon /> Code
           </ToggleGroupItem>
         </ToggleGroup>
-        <Peers />
-        <Button size="sm" variant={shared ? "secondary" : "ghost"} onClick={() => setSharing(true)}>
-          <UsersIcon /> Share
-        </Button>
+        {driveId ? (
+          <>
+            <Peers status />
+            <DriveFileButton
+              fileId={driveId}
+              item={driveItem}
+              peers={peers.map((p) => p.state.user)}
+              onItemChange={(item) => useCollab.setState({ driveItem: item })}
+            />
+          </>
+        ) : (
+          <>
+            <Peers />
+            <Button size="sm" variant={shared ? "secondary" : "ghost"} onClick={() => setSharing(true)}>
+              <UsersIcon /> Share
+            </Button>
+          </>
+        )}
         <Button size="sm" variant={chatOpen ? "secondary" : "ghost"} onClick={() => setChatOpen(!chatOpen)} aria-pressed={chatOpen}>
           <MessageSquareIcon /> Assistant
         </Button>
@@ -238,8 +272,8 @@ function Header({ onOpenSettings }: { onOpenSettings: () => void }) {
   )
 }
 
-/** Who else is in this workbook, and whether we are connected. */
-function Peers() {
+/** Who else is in this workbook, and whether we are connected. `status` shows only the connection. */
+function Peers({ status: statusOnly = false }: { status?: boolean }) {
   const roomId = useCollab((s) => s.roomId)
   const status = useCollab((s) => s.status)
   const peers = useCollab((s) => s.peers)
@@ -248,7 +282,7 @@ function Peers() {
   const label = status === "live" ? "Live" : status === "connecting" ? "Connecting…" : status === "failed" ? "Can't connect" : "Offline, changes will sync when you reconnect"
   return (
     <div className="flex items-center gap-2">
-      <div className="flex -space-x-1.5">
+      <div className={cn("flex -space-x-1.5", statusOnly && "hidden")}>
         {peers.slice(0, 5).map((p) => (
           <Tooltip key={p.clientId}>
             <TooltipTrigger asChild>
@@ -267,7 +301,7 @@ function Peers() {
       <Tooltip>
         <TooltipTrigger asChild>
           <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className={cn("size-2 rounded-full", dot)} /> {status === "live" ? (peers.length ? `${peers.length + 1} here` : "Live") : label.split(",")[0]}
+            <span className={cn("size-2 rounded-full", dot)} /> {statusOnly && status === "live" ? "" : status === "live" ? (peers.length ? `${peers.length + 1} here` : "Live") : label.split(",")[0]}
           </span>
         </TooltipTrigger>
         <TooltipContent>{label}</TooltipContent>
@@ -300,6 +334,27 @@ function ShareDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: 
           </DialogDescription>
         </DialogHeader>
         {failure && <p className="text-sm text-destructive">{failure}</p>}
+        <div className="flex items-start gap-3 rounded-xl border bg-muted/40 p-3">
+          <DriveLogo size={28} className="mt-0.5 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">Save to Drive</p>
+            <p className="text-xs text-muted-foreground">Share with people by email, choose who can edit, and find it with all your files at drive.nyggis.com.</p>
+          </div>
+          <Button
+            size="sm"
+            onClick={() =>
+              saveToDrive(activeId).then(
+                () => {
+                  onOpenChange(false)
+                  toast.success("Saved to Drive", { description: "Use Share to add people." })
+                },
+                (e) => (e?.signedOut ? (location.href = drive.loginUrl()) : toast.error(e?.message ?? "Couldn't save to Drive")),
+              )
+            }
+          >
+            Save
+          </Button>
+        </div>
         {roomId ? (
           <div className="flex gap-2">
             <Input readOnly value={link} onFocus={(e) => e.currentTarget.select()} aria-label="Share link" />
@@ -484,5 +539,25 @@ function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** Why a Drive workbook isn't open (signed out, no access), or that you can only view it. */
+function DriveNotice() {
+  const failure = useCollab((s) => s.failure)
+  const needsSignIn = useCollab((s) => s.needsSignIn)
+  const readOnly = useCollab((s) => s.readOnly)
+  const onDrive = useStore((s) => !!s.files[s.activeId]?.drive)
+  if (!onDrive || (!failure && !readOnly)) return null
+  return (
+    <div className={cn("flex items-center gap-3 border-b px-4 py-2 text-sm", failure ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground")}>
+      <DriveLogo size={18} />
+      <span className="flex-1">{failure ?? "You can view this workbook. Ask the owner for edit access to make changes."}</span>
+      {needsSignIn && (
+        <Button size="sm" asChild>
+          <a href={drive.loginUrl()}>Sign in</a>
+        </Button>
+      )}
+    </div>
   )
 }
