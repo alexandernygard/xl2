@@ -390,6 +390,27 @@ export function evaluate(wb: WorkbookDef, files: Record<string, string> = {}): W
     }
   }
 
+  /**
+   * Resolve overlaps from the top down: a block that collides with one above it
+   * (a table that grew, or an auto-placed block) moves below it, leaving a gap row.
+   * Blocks with an `at` claim their spot first; auto-placed ones fit in after.
+   */
+  function settle(rects: Rect[], placed: boolean[]): Rect[] {
+    const order = rects
+      .map((_, i) => i)
+      .sort((a, b) => +placed[b] - +placed[a] || rects[a].row - rects[b].row || rects[a].col - rects[b].col || a - b)
+    const out = rects.slice()
+    const done: Rect[] = []
+    for (const i of order) {
+      let r = out[i]
+      for (let hit = done.find((d) => intersects(d, r)); hit; hit = done.find((d) => intersects(d, r)))
+        r = { ...r, row: hit.row + hit.rows + 1 }
+      out[i] = r
+      done.push(r)
+    }
+    return out
+  }
+
   function layout(si: number) {
     const hit = layouts.get(si)
     if (hit) return hit
@@ -414,7 +435,7 @@ export function evaluate(wb: WorkbookDef, files: Record<string, string> = {}): W
         rects.push(rect)
         placed.push(!!at)
       }
-      const out = { rects, placed }
+      const out = { rects: settle(rects, placed), placed }
       layouts.set(si, out)
       return out
     } finally {
@@ -726,6 +747,7 @@ export function evaluate(wb: WorkbookDef, files: Record<string, string> = {}): W
     for (const b of blocks) {
       if (b.type === "table") b.rect = { ...b.rect, rows: tableHeight(b.source, b.rows.length, !!b.totals) }
     }
+    settle(blocks.map((b) => b.rect), blocks.map((b) => b.placed)).forEach((r, i) => (blocks[i].rect = r))
     for (let i = 0; i < blocks.length; i++)
       for (let j = i + 1; j < blocks.length; j++)
         if (intersects(blocks[i].rect, blocks[j].rect))

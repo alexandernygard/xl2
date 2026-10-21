@@ -1077,7 +1077,7 @@ export function SheetGrid({
 /** What a block moved to `rect` would overlap: another block or a free cell with content. */
 function blocked(sheet: SheetModel, block: BlockModel, rect: Rect): string | null {
   for (const b of sheet.blocks) {
-    if (b === block) continue
+    if (b.index === block.index) continue
     if (intersects(b.rect, rect)) return blockLabel(b)
   }
   for (const [a, c] of Object.entries(sheet.cells)) {

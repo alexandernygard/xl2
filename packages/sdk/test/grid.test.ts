@@ -82,6 +82,25 @@ export default workbook("x", [sheet("s", [text("hi"), metric("m", () => 1)])])`)
   })
 })
 
+describe("overlaps", () => {
+  it("moves a block down when a table above grows into it, and keeps auto-placed blocks clear", () => {
+    const r = run(`import { workbook, sheet, table, col, metric, text } from "@xl2/sdk"
+export default workbook("x", [sheet("s", [
+  table("t", { at: "A1", columns: { a: col.number() }, rows: [[1], [2], [3]] }),
+  metric("m", () => 1, { at: "A5:B7" }),
+  text("auto"),
+])])`)
+    if (!r.ok) throw r.error
+    const [t, m, txt] = r.model.sheets[0].blocks
+    // title, header, 3 rows, add row: rows 0-5, so the metric moves to row 7
+    expect(t.rect).toEqual({ row: 0, col: 0, rows: 6, cols: 1 })
+    expect(m.rect).toEqual({ row: 7, col: 0, rows: 3, cols: 2 })
+    // the auto-placed text would start at row 0; it fits in below both
+    expect(txt.rect.row).toBe(11)
+    expect(r.model.issues).toEqual([])
+  })
+})
+
 describe("cell formulas", () => {
   it("resolve A1 refs into tables, params, other sheets, and names", () => {
     const cells = model().sheets[0].cells
