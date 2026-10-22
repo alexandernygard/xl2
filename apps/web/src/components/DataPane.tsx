@@ -196,7 +196,7 @@ function Toolbar({ sheet }: { sheet: SheetModel | null }) {
   }
 
   return (
-    <div className="flex h-10 shrink-0 items-center gap-1 border-b bg-card px-2">
+    <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b bg-card px-2 [scrollbar-width:none] [&>*]:shrink-0">
       <ToolButton label="Bold" shortcut="⌘B" disabled={!canStyle} pressed={!!styled?.bold} onPressedChange={(p) => apply({ bold: p ? true : null })}>
         <BoldIcon />
       </ToolButton>
@@ -338,7 +338,7 @@ function FormulaBar({
     <div className="flex h-9 shrink-0 items-center gap-2 border-b bg-card px-2 text-sm">
       <input
         aria-label="Name box"
-        className="h-7 w-24 shrink-0 rounded-md border bg-background px-2 font-mono text-xs outline-none focus:ring-2 focus:ring-ring"
+        className="h-7 w-16 shrink-0 rounded-md border bg-background px-2 font-mono text-xs outline-none focus:ring-2 focus:ring-ring sm:w-24"
         value={name}
         placeholder="A1"
         onChange={(e) => setName(e.target.value)}
@@ -349,7 +349,7 @@ function FormulaBar({
         }}
         onBlur={() => setName(addr)}
       />
-      <span className="w-40 shrink-0 truncate font-mono text-xs text-muted-foreground" title={info ? cellLabel(info) : undefined}>
+      <span className="hidden w-40 shrink-0 truncate font-mono text-xs text-muted-foreground md:block" title={info ? cellLabel(info) : undefined}>
         {info && info.kind !== "empty" && info.kind !== "free" ? cellLabel(info) : ""}
       </span>
       <FunctionPalette onPick={(fn) => grid.current?.insertText(`${fn}()`, 1)}>

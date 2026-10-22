@@ -12,6 +12,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -23,6 +25,11 @@ import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
   ToggleGroup,
   ToggleGroupItem,
   Tooltip,
@@ -30,6 +37,7 @@ import {
   TooltipTrigger,
   cn,
   toast,
+  useIsMobile,
 } from "@alexandernygard/components"
 import {
   ChevronDownIcon,
@@ -37,6 +45,7 @@ import {
   FileSpreadsheetIcon,
   Columns2Icon,
   DownloadIcon,
+  EllipsisIcon,
   FileIcon,
   FilePlusIcon,
   MessageSquareIcon,
@@ -63,8 +72,12 @@ const MODELS = [
 ]
 
 export function App() {
-  const view = useStore((s) => s.view)
-  const chatOpen = useStore((s) => s.chatOpen)
+  const isMobile = useIsMobile()
+  // A phone has room for one pane, so split shows the grid there.
+  const view = useStore((s) => (isMobile && s.view === "split" ? "data" : s.view))
+  const chatOpen = useStore((s) => s.chatOpen && !isMobile)
+  // On a phone the assistant is a sheet over the grid, shut until asked for, apart from the saved desktop choice.
+  const [chatSheet, setChatSheet] = React.useState(false)
   const [settings, setSettings] = React.useState(false)
   const activeId = useStore((s) => s.activeId)
   const roomId = useStore((s) => s.files[s.activeId]?.roomId)
@@ -121,29 +134,40 @@ export function App() {
 
   return (
     <div className="flex h-full flex-col">
-      <Header onOpenSettings={() => setSettings(true)} />
+      <Header onOpenSettings={() => setSettings(true)} chatSheet={isMobile ? { open: chatSheet, setOpen: setChatSheet } : undefined} />
       <DriveNotice />
       <ResizablePanelGroup key={layout} orientation="horizontal" className="min-h-0 flex-1">
         {chatOpen && (
           <>
-            <ResizablePanel id="chat" defaultSize="26%" minSize="240px">
+            <ResizablePanel id="chat" defaultSize="26%" minSize="200px">
               <ChatPanel onOpenSettings={() => setSettings(true)} />
             </ResizablePanel>
             <ResizableHandle />
           </>
         )}
         {view !== "code" && (
-          <ResizablePanel id="data" defaultSize={view === "split" ? "44%" : "74%"} minSize="320px">
+          <ResizablePanel id="data" defaultSize={view === "split" ? "44%" : "74%"} minSize="240px">
             <DataPane />
           </ResizablePanel>
         )}
         {view === "split" && <ResizableHandle withHandle />}
         {view !== "data" && (
-          <ResizablePanel id="code" defaultSize={view === "split" ? "30%" : "74%"} minSize="280px">
+          <ResizablePanel id="code" defaultSize={view === "split" ? "30%" : "74%"} minSize="220px">
             <CodePane />
           </ResizablePanel>
         )}
       </ResizablePanelGroup>
+      {isMobile && (
+        <Sheet open={chatSheet} onOpenChange={setChatSheet}>
+          <SheetContent side="left" className="gap-0 p-0 pt-10 data-[side=left]:w-[92vw]">
+            <SheetHeader className="sr-only">
+              <SheetTitle>Assistant</SheetTitle>
+              <SheetDescription>Ask Claude to change the workbook</SheetDescription>
+            </SheetHeader>
+            <ChatPanel onOpenSettings={() => setSettings(true)} />
+          </SheetContent>
+        </Sheet>
+      )}
       <SettingsDialog open={settings} onOpenChange={setSettings} />
     </div>
   )
@@ -185,9 +209,9 @@ function CodePane() {
 
 const fileName = (name: string) => `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "workbook"}.xl.ts`
 
-function Header({ onOpenSettings }: { onOpenSettings: () => void }) {
+function Header({ onOpenSettings, chatSheet }: { onOpenSettings: () => void; chatSheet?: { open: boolean; setOpen: (open: boolean) => void } }) {
   const view = useStore((s) => s.view)
-  const chatOpen = useStore((s) => s.chatOpen)
+  const chatOpen = useStore((s) => (chatSheet ? chatSheet.open : s.chatOpen))
   const name = useStore((s) => s.files[s.activeId]?.name)
   const shared = useStore((s) => !!s.files[s.activeId]?.roomId)
   const driveId = useStore((s) => (s.files[s.activeId]?.drive ? s.files[s.activeId]?.roomId : undefined))
@@ -203,13 +227,14 @@ function Header({ onOpenSettings }: { onOpenSettings: () => void }) {
   const { undo, redo, setView, setChatOpen } = useStore.getState()
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-card px-3">
-      <div className="flex items-center gap-2 pr-2">
+    // Narrower than md the layout switch and settings move into a "⋯" menu, so the bar never outgrows a phone.
+    <header className="flex h-12 min-w-0 shrink-0 items-center gap-1 border-b bg-card px-2 sm:gap-2 sm:px-3">
+      <div className="hidden items-center gap-2 pr-2 sm:flex">
         <span className="flex size-7 items-center justify-center rounded-lg bg-primary font-mono text-xs font-bold text-highlight">xl</span>
         <span className="font-heading text-base">xl2</span>
       </div>
       <FileMenu name={name ?? "Untitled"} />
-      <div className="ml-2 flex items-center">
+      <div className="flex shrink-0 items-center sm:ml-2">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button size="icon-sm" variant="ghost" aria-label="Undo" disabled={!canUndo} onClick={undo}>
@@ -222,7 +247,7 @@ function Header({ onOpenSettings }: { onOpenSettings: () => void }) {
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button size="icon-sm" variant="ghost" aria-label="Redo" disabled={!canRedo} onClick={redo}>
+            <Button size="icon-sm" variant="ghost" className="hidden sm:inline-flex" aria-label="Redo" disabled={!canRedo} onClick={redo}>
               <Redo2Icon />
             </Button>
           </TooltipTrigger>
@@ -231,16 +256,16 @@ function Header({ onOpenSettings }: { onOpenSettings: () => void }) {
           </TooltipContent>
         </Tooltip>
       </div>
-      <div className="ml-auto flex items-center gap-2">
-        <ToggleGroup type="single" variant="outline" size="sm" value={view} onValueChange={(v) => v && setView(v as View)} aria-label="Layout">
+      <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
+        <ToggleGroup type="single" variant="outline" size="sm" className="hidden md:flex" value={view} onValueChange={(v) => v && setView(v as View)} aria-label="Layout">
           <ToggleGroupItem value="data" aria-label="Grid only">
-            <TableIcon /> Grid
+            <TableIcon /> <span className="hidden lg:inline">Grid</span>
           </ToggleGroupItem>
           <ToggleGroupItem value="split" aria-label="Side by side">
-            <Columns2Icon /> Split
+            <Columns2Icon /> <span className="hidden lg:inline">Split</span>
           </ToggleGroupItem>
           <ToggleGroupItem value="code" aria-label="Code only">
-            <CodeIcon /> Code
+            <CodeIcon /> <span className="hidden lg:inline">Code</span>
           </ToggleGroupItem>
         </ToggleGroup>
         {driveId ? (
@@ -256,17 +281,44 @@ function Header({ onOpenSettings }: { onOpenSettings: () => void }) {
         ) : (
           <>
             <Peers />
-            <Button size="sm" variant={shared ? "secondary" : "ghost"} onClick={() => setSharing(true)}>
-              <UsersIcon /> Share
+            <Button size="sm" variant={shared ? "secondary" : "ghost"} aria-label="Share" onClick={() => setSharing(true)}>
+              <UsersIcon /> <span className="hidden sm:inline">Share</span>
             </Button>
           </>
         )}
-        <Button size="sm" variant={chatOpen ? "secondary" : "ghost"} onClick={() => setChatOpen(!chatOpen)} aria-pressed={chatOpen}>
-          <MessageSquareIcon /> Assistant
+        <Button
+          size="sm"
+          variant={chatOpen ? "secondary" : "ghost"}
+          aria-label="Assistant"
+          onClick={() => (chatSheet ? chatSheet.setOpen(!chatSheet.open) : setChatOpen(!chatOpen))}
+          aria-pressed={chatOpen}
+        >
+          <MessageSquareIcon /> <span className="hidden lg:inline">Assistant</span>
         </Button>
-        <Button size="icon-sm" variant="ghost" aria-label="Settings" onClick={onOpenSettings}>
+        <Button size="icon-sm" variant="ghost" className="hidden md:inline-flex" aria-label="Settings" onClick={onOpenSettings}>
           <SettingsIcon />
         </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="icon-sm" variant="ghost" className="md:hidden" aria-label="More">
+              <EllipsisIcon />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-52">
+            <DropdownMenuRadioGroup value={view === "code" ? "code" : "data"} onValueChange={(v) => setView(v as View)}>
+              <DropdownMenuRadioItem value="data">
+                <TableIcon /> Grid
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="code">
+                <CodeIcon /> Code
+              </DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={onOpenSettings}>
+              <SettingsIcon /> Settings…
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       <ShareDialog open={sharing} onOpenChange={setSharing} onSaved={setSaved} />
       <DriveShareDialog
@@ -437,8 +489,8 @@ function FileMenu({ name }: { name: string }) {
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="gap-1.5 font-medium">
-            <FileIcon /> {name} <ChevronDownIcon className="text-muted-foreground" />
+          <Button variant="ghost" size="sm" className="min-w-0 shrink gap-1.5 font-medium">
+            <FileIcon /> <span className="truncate">{name}</span> <ChevronDownIcon className="text-muted-foreground" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-64">

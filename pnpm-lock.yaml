@@ -179,11 +179,11 @@ importers:
         specifier: ^0.1.0
         version: 0.1.0(react@19.3.1)(yjs@13.6.33)
       '@alexandernygard/components':
-        specifier: ^0.1.4
-        version: 0.1.4(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@19.3.1)(react@19.3.1)(redux@5.0.1)
+        specifier: ^0.3.0
+        version: 0.3.0(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(recharts@3.8.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@19.3.1)(react@19.3.1)(redux@5.0.1))
       '@alexandernygard/drive':
         specifier: ^0.1.0
-        version: 0.1.0(@alexandernygard/components@0.1.4(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@19.3.1)(react@19.3.1)(redux@5.0.1))(lucide-react@1.59.0(@types/react@19.3.0)(react@19.3.1))(react@19.3.1)
+        version: 0.1.0(@alexandernygard/components@0.3.0(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(recharts@3.8.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@19.3.1)(react@19.3.1)(redux@5.0.1)))(lucide-react@1.59.0(@types/react@19.3.0)(react@19.3.1))(react@19.3.1)
       '@anthropic-ai/sdk':
         specifier: ^0.135.0
         version: 0.135.0
@@ -306,8 +306,8 @@ importers:
         version: 3.8.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@19.3.1)(react@19.3.1)(redux@5.0.1)
     devDependencies:
       '@alexandernygard/components':
-        specifier: ^0.1.4
-        version: 0.1.4(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@19.3.1)(react@19.3.1)(redux@5.0.1)
+        specifier: ^0.3.0
+        version: 0.3.0(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(recharts@3.8.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@19.3.1)(react@19.3.1)(redux@5.0.1))
       '@types/react':
         specifier: ^19.3.0
         version: 19.3.0
@@ -336,11 +336,12 @@ packages:
       react:
         optional: true
 
-  '@alexandernygard/components@0.1.4':
-    resolution: {integrity: sha512-Vim54UhvV4168A7VBuvdQePEyyEl0Y1JqOyHpn2nhyPLCXZn2AdepJQO39VENEXqbzWaP38L4PswoehrR9zXCQ==}
+  '@alexandernygard/components@0.3.0':
+    resolution: {integrity: sha512-PNClkNUUoLS3VLUvL1mp39sF+qotYuw73L4SrcNty/W5T80iwLriZuSXJBbABCFnf44JqK7EnNMWCk7WRVk3wQ==}
     peerDependencies:
       react: ^18.3.0 || ^19.0.0
       react-dom: ^18.3.0 || ^19.0.0
+      recharts: ^3.8.0
 
   '@alexandernygard/drive@0.1.0':
     resolution: {integrity: sha512-4nxwHK2cIH4e4d7wKGvrUhdX+X1JiuNmOCZuKcGPTCy6oyTLY96YKdHx0f6x0HmJYmOZjkRWBPFUyUymfTTgEg==}
@@ -356,6 +357,9 @@ packages:
         optional: true
       react:
         optional: true
+
+  '@alexandernygard/illustrations@0.1.0':
+    resolution: {integrity: sha512-XgbdpV/bVIix94x4Ptx4Z//ztziQRRsPaFHyWdg/bAf+1C9zRFUSIXfViLjgrWvEsERqy9deLYz2S3tT6mPVhw==}
 
   '@alexandernygard/libron@0.31.0':
     resolution: {integrity: sha512-6SjSvRhCe8jCb/rCAnS4dF1k84jL5hFC17EQ/WtBLHrX7M1zmRmCdrg3Al3wPLKps0ORoK327uSVBCan9FxIVQ==}
@@ -2333,6 +2337,11 @@ packages:
   magic-string@1.4.3:
     resolution: {integrity: sha512-z12OxmaPGE0F4xlpGdjuAUckipLpQlTAuAmyGhNoD7ODpYUzvDfvtxUbjM/jwznyP178oju/KDdyi220wNJ0RQ==}
 
+  marked@18.1.1:
+    resolution: {integrity: sha512-zEGgrtUG8crk+TrMacJSVABU4DYDDkS8uqgU3ohrn/2fW9C2AEfUrO3m6IhpIpQpl7YcVpiXXC9cSMWDANT3dg==}
+    engines: {node: '>= 20'}
+    hasBin: true
+
   mdast-util-to-hast@13.2.1:
     resolution: {integrity: sha512-cctsq2wp5vTsLIcaymblUriiTcZd0CwWtCbLvrOzYCDZoWyMNV8sZ7krj09FSnsiJi3WVsHLM4k6Dq/yaPyCXA==}
 
@@ -2860,8 +2869,9 @@ snapshots:
     optionalDependencies:
       react: 19.3.1
 
-  '@alexandernygard/components@0.1.4(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@19.3.1)(react@19.3.1)(redux@5.0.1)':
+  '@alexandernygard/components@0.3.0(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(recharts@3.8.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@19.3.1)(react@19.3.1)(redux@5.0.1))':
     dependencies:
+      '@alexandernygard/illustrations': 0.1.0
       '@alexandernygard/tokens': 0.1.2
       '@base-ui/react': 1.9.0(@date-fns/tz@1.5.0)(@types/react@19.3.0)(date-fns@4.4.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@shadcn/react': 0.3.1(@types/react@19.3.0)(react@19.3.1)
@@ -2872,6 +2882,7 @@ snapshots:
       embla-carousel-react: 8.6.0(react@19.3.1)
       input-otp: 1.5.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       lucide-react: 1.59.0(@types/react@19.3.0)(react@19.3.1)
+      marked: 18.1.1
       radix-ui: 1.8.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       react: 19.3.1
       react-day-picker: 10.0.2(@types/react@19.3.0)(react@19.3.1)
@@ -2887,14 +2898,14 @@ snapshots:
       - '@date-fns/tz'
       - '@types/react'
       - '@types/react-dom'
-      - react-is
-      - redux
 
-  '@alexandernygard/drive@0.1.0(@alexandernygard/components@0.1.4(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@19.3.1)(react@19.3.1)(redux@5.0.1))(lucide-react@1.59.0(@types/react@19.3.0)(react@19.3.1))(react@19.3.1)':
+  '@alexandernygard/drive@0.1.0(@alexandernygard/components@0.3.0(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(recharts@3.8.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@19.3.1)(react@19.3.1)(redux@5.0.1)))(lucide-react@1.59.0(@types/react@19.3.0)(react@19.3.1))(react@19.3.1)':
     optionalDependencies:
-      '@alexandernygard/components': 0.1.4(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@19.3.1)(react@19.3.1)(redux@5.0.1)
+      '@alexandernygard/components': 0.3.0(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(recharts@3.8.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@19.3.1)(react@19.3.1)(redux@5.0.1))
       lucide-react: 1.59.0(@types/react@19.3.0)(react@19.3.1)
       react: 19.3.1
+
+  '@alexandernygard/illustrations@0.1.0': {}
 
   '@alexandernygard/libron@0.31.0': {}
 
@@ -4651,6 +4662,8 @@ snapshots:
   magic-string@1.4.3:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
+
+  marked@18.1.1: {}
 
   mdast-util-to-hast@13.2.1:
     dependencies:

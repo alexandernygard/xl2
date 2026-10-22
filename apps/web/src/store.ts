@@ -295,7 +295,8 @@ export const useStore = create<State>()(
       return {
         ...initialFiles(),
         view: "data",
-        chatOpen: true,
+        // The assistant starts open where there's room beside the grid.
+        chatOpen: typeof window === "undefined" || window.innerWidth >= 1024,
         apiKey: "",
         aiModel: "claude-opus-5-5",
 

@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@alexandernygard/components": "^0.1.4",
+    "@alexandernygard/collab": "^0.1.0",
+    "@alexandernygard/components": "^0.3.0",
+    "@alexandernygard/drive": "^0.1.0",
     "@anthropic-ai/sdk": "^0.135.0",
     "@codemirror/autocomplete": "^6.20.0",
     "@codemirror/commands": "^6.11.1",
@@ -28,10 +30,8 @@
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "typescript": "~5.9.3",
-    "zustand": "^5.0.15",
-    "@alexandernygard/collab": "^0.1.0",
     "yjs": "^13.6.33",
-    "@alexandernygard/drive": "^0.1.0"
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

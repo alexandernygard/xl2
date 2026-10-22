@@ -111,7 +111,7 @@ export function ChatPanel({ onOpenSettings }: { onOpenSettings: () => void }) {
             )}
             <div className="flex flex-wrap gap-2">
               {SUGGESTIONS.map((s) => (
-                <Button key={s} variant="outline" size="sm" className="h-auto rounded-full py-1 text-left whitespace-normal" onClick={() => submit(s)}>
+                <Button key={s} variant="outline" size="sm" className="h-auto max-w-full rounded-full py-1 text-left whitespace-normal" onClick={() => submit(s)}>
                   {s}
                 </Button>
               ))}
