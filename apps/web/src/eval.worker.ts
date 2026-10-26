@@ -1,8 +1,8 @@
 /// <reference lib="webworker" />
 import { run } from "@xl2/sdk/runtime"
 
-// Runs workbook code off the main thread. The page's localStorage (API key)
-// isn't reachable from a worker, a runaway loop only stalls this worker (the
+// Runs workbook code off the main thread. The page's localStorage isn't
+// reachable from a worker, a runaway loop only stalls this worker (the
 // app restarts it), and network APIs are removed before any workbook runs.
 
 for (const name of ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "indexedDB", "caches", "BroadcastChannel"]) {

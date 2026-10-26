@@ -10,10 +10,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@alexandernygard/ai-kit": "^0.1.0",
+    "@alexandernygard/ai-kit-react": "^0.1.0",
     "@alexandernygard/collab": "^0.1.0",
     "@alexandernygard/components": "^0.3.0",
     "@alexandernygard/drive": "^0.1.0",
-    "@anthropic-ai/sdk": "^0.135.0",
     "@codemirror/autocomplete": "^6.20.0",
     "@codemirror/commands": "^6.11.1",
     "@codemirror/lang-javascript": "^6.2.5",

@@ -97,8 +97,6 @@ interface State {
   activeId: string
   view: View
   chatOpen: boolean
-  apiKey: string
-  aiModel: string
 
   // not persisted
   model: WorkbookModel | null
@@ -146,8 +144,6 @@ interface State {
   setActiveSheet(i: number): void
   setView(v: View): void
   setChatOpen(open: boolean): void
-  setApiKey(k: string): void
-  setAiModel(m: string): void
   setCodeFile(f: string): void
   newFile(bundle: Bundle, opts?: { roomId?: string; drive?: boolean; name?: string }): void
   /** Share the active workbook (or stop sharing it). `drive`: the room is a Drive file. */
@@ -297,8 +293,6 @@ export const useStore = create<State>()(
         view: "data",
         // The assistant starts open where there's room beside the grid.
         chatOpen: typeof window === "undefined" || window.innerWidth >= 1024,
-        apiKey: "",
-        aiModel: "claude-opus-5-5",
 
         model: null,
         error: null,
@@ -507,8 +501,6 @@ export const useStore = create<State>()(
         setActiveSheet: (i) => set({ activeSheet: i, selection: null, selectedBlock: null }),
         setView: (view) => set({ view }),
         setChatOpen: (chatOpen) => set({ chatOpen }),
-        setApiKey: (apiKey) => set({ apiKey }),
-        setAiModel: (aiModel) => set({ aiModel }),
         setCodeFile: (codeFile) => set({ codeFile }),
 
         setRoom(fileId, roomId, drive) {
@@ -571,8 +563,6 @@ export const useStore = create<State>()(
         activeId: s.activeId,
         view: s.view,
         chatOpen: s.chatOpen,
-        apiKey: s.apiKey,
-        aiModel: s.aiModel,
       }),
     },
   ),

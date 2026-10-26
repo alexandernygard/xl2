@@ -50,7 +50,6 @@ import {
   FilePlusIcon,
   MessageSquareIcon,
   Redo2Icon,
-  SettingsIcon,
   TableIcon,
   UsersIcon,
   Trash2Icon,
@@ -65,12 +64,6 @@ import { fileFromUrl, type Item } from "@alexandernygard/drive"
 import { DriveFileButton, DriveLogo, ShareDialog as DriveShareDialog, useDriveUser } from "@alexandernygard/drive/react"
 import { closeRoom, drive, openDriveFile, openRoom, saveToDrive, useCollab } from "./collab"
 
-const MODELS = [
-  { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
-  { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
-  { id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
-]
-
 export function App() {
   const isMobile = useIsMobile()
   // A phone has room for one pane, so split shows the grid there.
@@ -78,7 +71,6 @@ export function App() {
   const chatOpen = useStore((s) => s.chatOpen && !isMobile)
   // On a phone the assistant is a sheet over the grid, shut until asked for, apart from the saved desktop choice.
   const [chatSheet, setChatSheet] = React.useState(false)
-  const [settings, setSettings] = React.useState(false)
   const activeId = useStore((s) => s.activeId)
   const roomId = useStore((s) => s.files[s.activeId]?.roomId)
 
@@ -134,13 +126,13 @@ export function App() {
 
   return (
     <div className="flex h-full flex-col">
-      <Header onOpenSettings={() => setSettings(true)} chatSheet={isMobile ? { open: chatSheet, setOpen: setChatSheet } : undefined} />
+      <Header chatSheet={isMobile ? { open: chatSheet, setOpen: setChatSheet } : undefined} />
       <DriveNotice />
       <ResizablePanelGroup key={layout} orientation="horizontal" className="min-h-0 flex-1">
         {chatOpen && (
           <>
             <ResizablePanel id="chat" defaultSize="26%" minSize="200px">
-              <ChatPanel onOpenSettings={() => setSettings(true)} />
+              <ChatPanel />
             </ResizablePanel>
             <ResizableHandle />
           </>
@@ -164,11 +156,10 @@ export function App() {
               <SheetTitle>Assistant</SheetTitle>
               <SheetDescription>Ask Claude to change the workbook</SheetDescription>
             </SheetHeader>
-            <ChatPanel onOpenSettings={() => setSettings(true)} />
+            <ChatPanel />
           </SheetContent>
         </Sheet>
       )}
-      <SettingsDialog open={settings} onOpenChange={setSettings} />
     </div>
   )
 }
@@ -209,7 +200,7 @@ function CodePane() {
 
 const fileName = (name: string) => `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "workbook"}.xl.ts`
 
-function Header({ onOpenSettings, chatSheet }: { onOpenSettings: () => void; chatSheet?: { open: boolean; setOpen: (open: boolean) => void } }) {
+function Header({ chatSheet }: { chatSheet?: { open: boolean; setOpen: (open: boolean) => void } }) {
   const view = useStore((s) => s.view)
   const chatOpen = useStore((s) => (chatSheet ? chatSheet.open : s.chatOpen))
   const name = useStore((s) => s.files[s.activeId]?.name)
@@ -227,7 +218,7 @@ function Header({ onOpenSettings, chatSheet }: { onOpenSettings: () => void; cha
   const { undo, redo, setView, setChatOpen } = useStore.getState()
 
   return (
-    // Narrower than md the layout switch and settings move into a "⋯" menu, so the bar never outgrows a phone.
+    // Narrower than md the layout switch moves into a "⋯" menu, so the bar never outgrows a phone.
     <header className="flex h-12 min-w-0 shrink-0 items-center gap-1 border-b bg-card px-2 sm:gap-2 sm:px-3">
       <div className="hidden items-center gap-2 pr-2 sm:flex">
         <span className="flex size-7 items-center justify-center rounded-lg bg-primary font-mono text-xs font-bold text-highlight">xl</span>
@@ -295,9 +286,6 @@ function Header({ onOpenSettings, chatSheet }: { onOpenSettings: () => void; cha
         >
           <MessageSquareIcon /> <span className="hidden lg:inline">Assistant</span>
         </Button>
-        <Button size="icon-sm" variant="ghost" className="hidden md:inline-flex" aria-label="Settings" onClick={onOpenSettings}>
-          <SettingsIcon />
-        </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button size="icon-sm" variant="ghost" className="md:hidden" aria-label="More">
@@ -313,10 +301,6 @@ function Header({ onOpenSettings, chatSheet }: { onOpenSettings: () => void; cha
                 <CodeIcon /> Code
               </DropdownMenuRadioItem>
             </DropdownMenuRadioGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={onOpenSettings}>
-              <SettingsIcon /> Settings…
-            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -538,65 +522,6 @@ function FileMenu({ name }: { name: string }) {
         }}
       />
     </>
-  )
-}
-
-function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
-  const apiKey = useStore((s) => s.apiKey)
-  const aiModel = useStore((s) => s.aiModel)
-  const [key, setKey] = React.useState(apiKey)
-  const [model, setModel] = React.useState(aiModel)
-  React.useEffect(() => {
-    if (open) {
-      setKey(apiKey)
-      setModel(aiModel)
-    }
-  }, [open, apiKey, aiModel])
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Assistant settings</DialogTitle>
-          <DialogDescription>
-            The key stays in this browser (localStorage) and is sent only to api.anthropic.com. There is no server.
-          </DialogDescription>
-        </DialogHeader>
-        <form
-          id="settings"
-          className="grid gap-4"
-          onSubmit={(e) => {
-            e.preventDefault()
-            useStore.getState().setApiKey(key.trim())
-            useStore.getState().setAiModel(model)
-            onOpenChange(false)
-          }}
-        >
-          <div className="grid gap-2">
-            <Label htmlFor="api-key">Anthropic API key</Label>
-            <Input id="api-key" type="password" autoComplete="off" placeholder="sk-ant-…" value={key} onChange={(e) => setKey(e.target.value)} />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="model">Model</Label>
-            <select id="model" className="h-8 rounded-lg border bg-background px-2 text-sm" value={model} onChange={(e) => setModel(e.target.value)}>
-              {MODELS.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        </form>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button type="submit" form="settings">
-            Save
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   )
 }
 

@@ -1,7 +1,6 @@
-import Anthropic from "@anthropic-ai/sdk"
 import { create } from "zustand"
+import { Chat, httpTransport, type ClientToolHandler } from "@alexandernygard/ai-kit-react"
 import {
-  SDK_REFERENCE,
   address,
   cellAt,
   cellLabel,
@@ -16,138 +15,38 @@ import {
   type WorkbookModel,
 } from "@xl2/sdk"
 import { selectionRect } from "@xl2/viz"
-import { MAIN, takeReviewNotes, useStore, type ChatMessage, type ChatPart } from "./store"
+import { MAIN, takeReviewNotes, useStore } from "./store"
+import { fetchWithRefresh } from "./auth/browser"
 import type { EvalResult } from "./evaluator"
 import { tsDiagnostics } from "./tsClient"
 
-// The assistant: a streaming tool-use loop that reads and edits the workbook
-// source through the same SDK functions the UI uses.
+// The assistant runs in the Worker (apps/worker/src/assistant.ts) with the app's Claude key. Its tools
+// read and edit the workbook, which lives here, so they run in the page as ai-kit client tools, through
+// the same SDK functions the UI uses.
 
-const SYSTEM = `You are the assistant inside xl2, a spreadsheet where the workbook is a TypeScript file plus optional CSV
-data files. The user mainly sees each sheet as an infinite grid: tables, params and free cells sit in cells; charts,
-metrics and text float over cell ranges. Every change you make goes through your tools and shows up live.
-Each user message carries the current code in <workbook_source>, a summary of data files in <data_files>, and the
-user's selection and active sheet.
+export const transport = httpTransport({ baseUrl: "/api/ai", fetch: (input, init) => fetchWithRefresh(input, init) })
 
-How to work:
-- Answer questions about the data with read_values (computed results). Don't guess numbers. Read a range like "A1:H20"
-  to see what's where on a sheet before placing new things.
-- Change values with set_cells: table cells by {table, row, column}, or any grid cell by {sheet, address} (free cells
-  accept "=..." formulas). Change structure, formulas, charts or layout with edit_code (exact string replacement on the
-  code or a data file; keep edits small). Use write_code for new workbooks, large rewrites, or creating a data file.
-- Give every new block an \`at\` that doesn't overlap existing blocks or cells (the tool result reports overlaps).
-- Prefer formulas, queries and params over hard-coded computed numbers, so the sheet stays live.
-- After editing, the tool result tells you whether the workbook still evaluates. If it reports errors, fix them.
-- The user reviews your changes: each edit tool call is one item they accept or reject, and they see changed cells
-  highlighted. Give every edit a short \`summary\` (e.g. "Add margin column"), and keep unrelated changes in separate
-  calls so they can be judged on their own. Your changes are live in the workbook while they wait for review.
-- Keep replies short: say what you changed or found. The user can see the sheet, so don't repeat the whole table.
+// --- conversations: one ai-kit Chat per workbook (not persisted) -------------
+// Kept outside React, so a run carries on when the panel closes or the layout changes.
 
-${SDK_REFERENCE}`
+const chats = new Map<string, Chat>()
 
-const tools: Anthropic.Tool[] = [
-  {
-    name: "read_values",
-    description:
-      "Read evaluated values. With no input: an overview of every sheet (blocks with their grid ranges, metric values, params, free cells). With `table`: rows of that table or query, including computed columns. With `sheet` and `range` (e.g. \"A1:H20\"): the grid as rows of cells, showing values and the formulas of free cells.",
-    input_schema: {
-      type: "object",
-      properties: {
-        table: { type: "string", description: "Table or query name" },
-        offset: { type: "integer", description: "First row (0-based), with table" },
-        limit: { type: "integer", description: "Max rows, default 200, with table" },
-        sheet: { type: "string", description: "Sheet name, with range" },
-        range: { type: "string", description: "A1 range on the sheet, at most 2000 cells" },
-      },
-    },
-  },
-  {
-    name: "set_cells",
-    description:
-      "Set cell values. Each edit is either {table, row, column, value} for a table cell (rows 0-based; row = row count appends; a formula column gets an override), or {sheet, address, value} for a grid cell (free cells take literals or \"=...\" formulas; param value cells set the param). Values are string, number, boolean or null; percents are fractions (0.25 = 25%).",
-    input_schema: {
-      type: "object",
-      properties: {
-        summary: { type: "string", description: "A few words for the review list, e.g. \"Add margin column\"" },
-        edits: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              table: { type: "string" },
-              row: { type: "integer" },
-              column: { type: "string" },
-              sheet: { type: "string" },
-              address: { type: "string" },
-              value: { type: ["string", "number", "boolean", "null"] },
-            },
-            required: ["value"],
-          },
-        },
-      },
-      required: ["edits"],
-    },
-  },
-  {
-    name: "edit_code",
-    description:
-      "Replace one exact, unique occurrence of old_string with new_string in the workbook code, or in a data file when `file` names one (e.g. \"orders.csv\"). Include enough context to make old_string unique.",
-    eager_input_streaming: true,
-    input_schema: {
-      type: "object",
-      properties: {
-        file: { type: "string", description: "Data file name; omit for the workbook code" },
-        summary: { type: "string", description: "A few words for the review list, e.g. \"Add margin column\"" },
-        old_string: { type: "string" },
-        new_string: { type: "string" },
-      },
-      required: ["old_string", "new_string"],
-    },
-  },
-  {
-    name: "write_code",
-    description: "Replace the entire workbook code, or write a whole data file (creating it if needed) when `file` names one. Data files are CSV with a header line of column keys.",
-    eager_input_streaming: true,
-    input_schema: {
-      type: "object",
-      properties: {
-        file: { type: "string", description: "Data file name like \"sales.csv\"; omit for the workbook code" },
-        summary: { type: "string", description: "A few words for the review list, e.g. \"Add margin column\"" },
-        source: { type: "string", description: "The full file contents" },
-      },
-      required: ["source"],
-    },
-  },
-]
+/** Bumped when a conversation is cleared, so the panel picks up the new Chat. */
+export const useChats = create<{ version: number }>(() => ({ version: 0 }))
 
-// --- chat state (per file, not persisted) -----------------------------------
-
-interface ChatState {
-  messages: Record<string, ChatMessage[]>
-  transcripts: Record<string, Anthropic.Beta.BetaMessageParam[]>
-  running: boolean
-  abort: AbortController | null
+export function chatFor(fileId: string): Chat {
+  let chat = chats.get(fileId)
+  if (!chat) {
+    chat = new Chat({ transport, newSession: { agent: "xl2" }, clientTools })
+    chats.set(fileId, chat)
+  }
+  return chat
 }
 
-export const useChat = create<ChatState>(() => ({ messages: {}, transcripts: {}, running: false, abort: null }))
-
-function updateLast(fileId: string, fn: (m: ChatMessage) => ChatMessage) {
-  useChat.setState((s) => {
-    const list = [...(s.messages[fileId] ?? [])]
-    list[list.length - 1] = fn(list[list.length - 1])
-    return { messages: { ...s.messages, [fileId]: list } }
-  })
-}
-
-function pushPart(fileId: string, part: ChatPart) {
-  updateLast(fileId, (m) => ({ ...m, parts: [...m.parts, part] }))
-}
-
-function patchTool(fileId: string, id: string, patch: Partial<Extract<ChatPart, { type: "tool" }>>) {
-  updateLast(fileId, (m) => ({
-    ...m,
-    parts: m.parts.map((p) => (p.type === "tool" && p.id === id ? { ...p, ...patch } : p)),
-  }))
+export function clearChat(fileId: string) {
+  void chats.get(fileId)?.stop()
+  chats.delete(fileId)
+  useChats.setState((s) => ({ version: s.version + 1 }))
 }
 
 // --- tools -------------------------------------------------------------------
@@ -176,6 +75,10 @@ function evalReport(r: EvalResult): string {
 
 /** The assistant message being written, so its edits are tied to it in the review list. */
 let currentMessage: string | undefined
+
+export function setCurrentMessage(id: string | undefined) {
+  currentMessage = id
+}
 
 /** Apply an edit as a draft step for review, and report how the workbook evaluates afterwards. */
 async function commit(op: StepOp, input: any, fallback: string): Promise<ToolOutput> {
@@ -347,7 +250,7 @@ async function runTool(name: string, input: any): Promise<ToolOutput> {
   return { content: `Unknown tool ${name}`, isError: true, summary: name }
 }
 
-// --- the loop ----------------------------------------------------------------
+// --- what the agent gets ----------------------------------------------------
 
 /** What happened to Claude's earlier changes: rejections since the last message, and what still waits for review. */
 function review(fileId: string): string {
@@ -357,13 +260,9 @@ function review(fileId: string): string {
   return lines.length ? `<review>\n${lines.join("\n")}\n</review>` : ""
 }
 
-export async function send(userText: string) {
+/** The workbook as the agent sees it with each message. Sent as clientContext; the Worker adds it to the turn. */
+export function workbookContext(): { workbook: string } {
   const store = useStore.getState()
-  const fileId = store.activeId
-  if (!store.apiKey) throw new Error("Add your Anthropic API key in settings first.")
-
-  const client = new Anthropic({ apiKey: store.apiKey, dangerouslyAllowBrowser: true })
-  const abort = new AbortController()
   const bundle = store.bundle()
   const sheet = store.model?.sheets[store.activeSheet]
   const sel = store.selection && sheet ? store.selection : null
@@ -378,135 +277,30 @@ export async function send(userText: string) {
     const lines = text.split("\n").filter(Boolean)
     return `${f}: ${Math.max(0, lines.length - 1)} rows\n${lines.slice(0, 4).join("\n")}${lines.length > 4 ? "\n…" : ""}`
   })
-  const context = [
+  const workbook = [
     `<workbook_source>\n${bundle.source}\n</workbook_source>`,
     files.length ? `<data_files>\n${files.join("\n\n")}\n</data_files>` : "",
     selText,
     sheet ? `<active_sheet>${sheet.name}</active_sheet>` : "",
     store.error ? `<current_error>${store.error.message}</current_error>` : "",
-    review(fileId),
+    review(store.activeId),
   ]
     .filter(Boolean)
     .join("\n")
+  return { workbook }
+}
 
-  const assistantId = crypto.randomUUID()
-  const transcript = [
-    ...(useChat.getState().transcripts[fileId] ?? []),
-    { role: "user" as const, content: [{ type: "text" as const, text: `${context}\n\n${userText}` }] },
-  ]
+/** What a tool sends back: the model reads `content`; the chat shows `summary` and review controls for `stepId`. */
+export type ToolResult = { content: string; summary: string; stepId?: string }
 
-  useChat.setState((s) => ({
-    running: true,
-    abort,
-    messages: {
-      ...s.messages,
-      [fileId]: [
-        ...(s.messages[fileId] ?? []),
-        { id: crypto.randomUUID(), role: "user", parts: [{ type: "text", text: userText }] },
-        { id: assistantId, role: "assistant", parts: [] },
-      ],
+/** The agent's tools, run in the page. A thrown error goes back to the model as a failed call. */
+export const clientTools: Record<string, ClientToolHandler> = Object.fromEntries(
+  ["read_values", "set_cells", "edit_code", "write_code"].map((name) => [
+    name,
+    async (input: unknown): Promise<ToolResult> => {
+      const out = await runTool(name, input)
+      if (out.isError) throw new Error(out.content)
+      return { content: out.content, summary: out.summary, stepId: out.stepId }
     },
-  }))
-  currentMessage = assistantId
-
-  const save = () => useChat.setState((s) => ({ transcripts: { ...s.transcripts, [fileId]: [...transcript] } }))
-
-  try {
-    for (let turn = 0; turn < 25; turn++) {
-      const stream = client.beta.messages.stream(
-        {
-          model: useStore.getState().aiModel,
-          max_tokens: 32000,
-          system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
-          cache_control: { type: "ephemeral" },
-          thinking: { type: "adaptive", display: "summarized" },
-          output_config: { effort: "medium" },
-          betas: ["server-side-fallback-2026-07-01"],
-          fallbacks: "default",
-          tools,
-          messages: transcript,
-        } as Anthropic.Beta.MessageCreateParamsStreaming,
-        { signal: abort.signal },
-      )
-
-      // stream text and thinking summaries into the last assistant message
-      let mode: "text" | "thinking" | null = null
-      stream.on("streamEvent", (ev) => {
-        if (ev.type === "content_block_start") {
-          const t = ev.content_block.type
-          mode = t === "text" ? "text" : t === "thinking" ? "thinking" : null
-          if (mode) pushPart(fileId, { type: mode, text: "" })
-        } else if (ev.type === "content_block_delta" && mode) {
-          const d = ev.delta
-          const chunk = d.type === "text_delta" ? d.text : d.type === "thinking_delta" ? d.thinking : ""
-          if (chunk)
-            updateLast(fileId, (m) => {
-              const parts = [...m.parts]
-              const last = parts[parts.length - 1]
-              if (last && (last.type === "text" || last.type === "thinking")) parts[parts.length - 1] = { ...last, text: last.text + chunk }
-              return { ...m, parts }
-            })
-        }
-      })
-
-      const message = await stream.finalMessage()
-      // drop empty thinking placeholders (thinking can be omitted)
-      updateLast(fileId, (m) => ({ ...m, parts: m.parts.filter((p) => !(p.type === "thinking" && !p.text.trim())) }))
-
-      transcript.push({ role: "assistant", content: message.content as Anthropic.Beta.BetaContentBlockParam[] })
-
-      if (message.stop_reason === "refusal") {
-        updateLast(fileId, (m) => ({ ...m, error: "Claude declined this request." }))
-        break
-      }
-      if (message.stop_reason === "pause_turn") continue
-      const uses = message.content.filter((b): b is Anthropic.Beta.BetaToolUseBlock => b.type === "tool_use")
-      if (!uses.length) break
-      if (message.stop_reason === "max_tokens") {
-        transcript.pop() // a truncated tool call must not run, and can't stay in the transcript unanswered
-        updateLast(fileId, (m) => ({ ...m, error: "The response was cut off (max tokens). Try a smaller request." }))
-        break
-      }
-
-      const results: Anthropic.Beta.BetaToolResultBlockParam[] = []
-      for (const u of uses) {
-        pushPart(fileId, { type: "tool", id: u.id, name: u.name, summary: u.name, status: "running" })
-        let out: ToolOutput
-        try {
-          out = await runTool(u.name, u.input)
-        } catch (e) {
-          out = { content: String(e), isError: true, summary: u.name }
-        }
-        patchTool(fileId, u.id, { summary: out.summary, status: out.isError ? "error" : "ok", detail: out.content, stepId: out.stepId })
-        results.push({ type: "tool_result", tool_use_id: u.id, content: out.content, is_error: out.isError })
-      }
-      transcript.push({ role: "user", content: results })
-    }
-    save()
-  } catch (e) {
-    const aborted = abort.signal.aborted
-    // keep the transcript valid: drop a trailing assistant turn whose tools never got results
-    const last = transcript[transcript.length - 1]
-    if (last?.role === "assistant" && Array.isArray(last.content) && last.content.some((b) => b.type === "tool_use")) transcript.pop()
-    save()
-    updateLast(fileId, (m) => ({ ...m, error: aborted ? "Stopped." : errorMessage(e) }))
-  } finally {
-    currentMessage = undefined
-    useChat.setState({ running: false, abort: null })
-  }
-}
-
-function errorMessage(e: unknown): string {
-  if (e instanceof Anthropic.AuthenticationError) return "The API key was rejected. Check it in settings."
-  if (e instanceof Anthropic.RateLimitError) return "Rate limited. Wait a moment and try again."
-  if (e instanceof Anthropic.APIError) return `${e.status ?? ""} ${e.message}`.trim()
-  return e instanceof Error ? e.message : String(e)
-}
-
-export function stop() {
-  useChat.getState().abort?.abort()
-}
-
-export function clearChat(fileId: string) {
-  useChat.setState((s) => ({ messages: { ...s.messages, [fileId]: [] }, transcripts: { ...s.transcripts, [fileId]: [] } }))
-}
+  ]),
+)

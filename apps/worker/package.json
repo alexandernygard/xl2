@@ -8,7 +8,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@alexandernygard/collab": "^0.1.0"
+    "@alexandernygard/ai-kit": "^0.1.0",
+    "@alexandernygard/ai-kit-anthropic": "^0.1.0",
+    "@alexandernygard/ai-kit-server": "^0.1.0",
+    "@alexandernygard/collab": "^0.1.0",
+    "@anthropic-ai/sdk": "^0.135.0",
+    "@xl2/sdk": "workspace:*",
+    "jose": "^6.2.13"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261019.1",

@@ -175,6 +175,12 @@ importers:
 
   apps/web:
     dependencies:
+      '@alexandernygard/ai-kit':
+        specifier: ^0.1.0
+        version: 0.1.0
+      '@alexandernygard/ai-kit-react':
+        specifier: ^0.1.0
+        version: 0.1.0(@alexandernygard/ai-kit@0.1.0)(react@19.3.1)
       '@alexandernygard/collab':
         specifier: ^0.1.0
         version: 0.1.0(react@19.3.1)(yjs@13.6.33)
@@ -184,9 +190,6 @@ importers:
       '@alexandernygard/drive':
         specifier: ^0.1.0
         version: 0.1.0(@alexandernygard/components@0.3.0(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(recharts@3.8.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react-is@19.3.1)(react@19.3.1)(redux@5.0.1)))(lucide-react@1.59.0(@types/react@19.3.0)(react@19.3.1))(react@19.3.1)
-      '@anthropic-ai/sdk':
-        specifier: ^0.135.0
-        version: 0.135.0
       '@codemirror/autocomplete':
         specifier: ^6.20.0
         version: 6.20.3
@@ -263,9 +266,27 @@ importers:
 
   apps/worker:
     dependencies:
+      '@alexandernygard/ai-kit':
+        specifier: ^0.1.0
+        version: 0.1.0
+      '@alexandernygard/ai-kit-anthropic':
+        specifier: ^0.1.0
+        version: 0.1.0(@alexandernygard/ai-kit@0.1.0)(@anthropic-ai/sdk@0.135.0(zod@4.6.7))
+      '@alexandernygard/ai-kit-server':
+        specifier: ^0.1.0
+        version: 0.1.0(@alexandernygard/ai-kit@0.1.0)
       '@alexandernygard/collab':
         specifier: ^0.1.0
         version: 0.1.0(react@19.3.1)(yjs@13.6.33)
+      '@anthropic-ai/sdk':
+        specifier: ^0.135.0
+        version: 0.135.0(zod@4.6.7)
+      '@xl2/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      jose:
+        specifier: ^6.2.13
+        version: 6.2.13
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20261019.1
@@ -325,6 +346,31 @@ importers:
         version: 5.9.3
 
 packages:
+
+  '@alexandernygard/ai-kit-anthropic@0.1.0':
+    resolution: {integrity: sha512-S0HxpYCDYnBEP1t+k9vGy9oJWLTEqTVSBBR6rZayHNUPRPQYApwlsipczfUCJsbLB8+yWsrX5UBrmTajIx5u9w==}
+    peerDependencies:
+      '@alexandernygard/ai-kit': ^0.1.0
+      '@anthropic-ai/sdk': '>=0.130.0'
+
+  '@alexandernygard/ai-kit-client@0.1.0':
+    resolution: {integrity: sha512-/8RCtNdz4VhWX+lI881Vtkn3czOo0LUgZBDZAVFbQOqbZF+EaXo3SWfE6zb4h2tmAWLreDgqAEEP+sSZZ/KZTw==}
+    peerDependencies:
+      '@alexandernygard/ai-kit': ^0.1.0
+
+  '@alexandernygard/ai-kit-react@0.1.0':
+    resolution: {integrity: sha512-de9/7fbLnDTUmm6pwulE5lmjU9SwU2Y9HUNNo3QX08v9S+73L5f27gPSakbcz7pZZo7FFFgLL7rF+/kgPDLfVg==}
+    peerDependencies:
+      '@alexandernygard/ai-kit': ^0.1.0
+      react: ^18.3.0 || ^19.0.0
+
+  '@alexandernygard/ai-kit-server@0.1.0':
+    resolution: {integrity: sha512-4HMpJ2+8dEytmLSYRxjJ1iaX1q9Y5dzt7R4KiYKWtSJ3mo4KFTewT3b3EYwTz67NfJNGIH392sVUbUAq4AjlMQ==}
+    peerDependencies:
+      '@alexandernygard/ai-kit': ^0.1.0
+
+  '@alexandernygard/ai-kit@0.1.0':
+    resolution: {integrity: sha512-s3hHoatfvCQfZeEz+P2nv344iv5RwfDxVEEaN6273d0PQs+z8JcV706XC9oRJtv3gtmscxmVBsmIK+j2E8m4Hg==}
 
   '@alexandernygard/collab@0.1.0':
     resolution: {integrity: sha512-bNjTRC7V9+aqVfBl2jLBm6TEUTOXZHFp/uEUXzGi9431GPh2IaJT9k8L8qPxW8JpYz1pMKJsI4cS7O5valpA6A==}
@@ -2158,6 +2204,9 @@ packages:
     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
     hasBin: true
 
+  jose@6.2.13:
+    resolution: {integrity: sha512-7TIg10ZE1x82YediN+lcrPNvGMKge9yFHQD+Qho/b8y2adfugU3AsvvHfxV0fzyFllT6l9xCjf4RWY9g/Z9PJQ==}
+
   json-schema-to-ts@3.1.1:
     resolution: {integrity: sha512-+DWg8jCJG2TEnpy7kOm/7/AxaYoaRbjVB4LFZLySZlWn8exGs3A4OLJR966cVvU26N7X9TWxl+Jsw7dzAqKT6g==}
     engines: {node: '>=16'}
@@ -2837,6 +2886,9 @@ packages:
   youch@4.1.0-beta.10:
     resolution: {integrity: sha512-rLfVLB4FgQneDr0dv1oddCVZmKjcJ6yX6mS4pU82Mq/Dt9a3cLZQ62pDBL4AUO+uVrCvtWz3ZFUL2HFAFJ/BXQ==}
 
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
+
   zustand@5.0.15:
     resolution: {integrity: sha512-MpSEjRiBkA9crSYeOUH32rJC7SVqAbm0Fqcqge/bUi2PPoLcBWKOsG+C8mevmpr8TwXHBVkChbbJiyvkE+i/3A==}
     engines: {node: '>=12.20.0'}
@@ -2859,6 +2911,27 @@ packages:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
+
+  '@alexandernygard/ai-kit-anthropic@0.1.0(@alexandernygard/ai-kit@0.1.0)(@anthropic-ai/sdk@0.135.0(zod@4.6.7))':
+    dependencies:
+      '@alexandernygard/ai-kit': 0.1.0
+      '@anthropic-ai/sdk': 0.135.0(zod@4.6.7)
+
+  '@alexandernygard/ai-kit-client@0.1.0(@alexandernygard/ai-kit@0.1.0)':
+    dependencies:
+      '@alexandernygard/ai-kit': 0.1.0
+
+  '@alexandernygard/ai-kit-react@0.1.0(@alexandernygard/ai-kit@0.1.0)(react@19.3.1)':
+    dependencies:
+      '@alexandernygard/ai-kit': 0.1.0
+      '@alexandernygard/ai-kit-client': 0.1.0(@alexandernygard/ai-kit@0.1.0)
+      react: 19.3.1
+
+  '@alexandernygard/ai-kit-server@0.1.0(@alexandernygard/ai-kit@0.1.0)':
+    dependencies:
+      '@alexandernygard/ai-kit': 0.1.0
+
+  '@alexandernygard/ai-kit@0.1.0': {}
 
   '@alexandernygard/collab@0.1.0(react@19.3.1)(yjs@13.6.33)':
     dependencies:
@@ -2913,11 +2986,13 @@ snapshots:
     dependencies:
       '@alexandernygard/libron': 0.31.0
 
-  '@anthropic-ai/sdk@0.135.0':
+  '@anthropic-ai/sdk@0.135.0(zod@4.6.7)':
     dependencies:
       '@opentelemetry/api': 1.9.1
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.1.1
+    optionalDependencies:
+      zod: 4.6.7
 
   '@babel/helper-string-parser@8.0.6': {}
 
@@ -4538,6 +4613,8 @@ snapshots:
 
   jiti@2.7.0: {}
 
+  jose@6.2.13: {}
+
   json-schema-to-ts@3.1.1:
     dependencies:
       '@babel/runtime': 7.29.10
@@ -5218,6 +5295,9 @@ snapshots:
       '@speed-highlight/core': 1.2.24
       cookie: 1.1.1
       youch-core: 0.3.3
+
+  zod@4.6.7:
+    optional: true
 
   zustand@5.0.15(@types/react@19.3.0)(immer@11.1.21)(react@19.3.1)(use-sync-external-store@1.7.0(react@19.3.1)):
     optionalDependencies:
