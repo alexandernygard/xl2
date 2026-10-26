@@ -8,7 +8,7 @@ import type { Meter } from "./auth/usage"
 // browser, so they're client tools: declared here without `execute`, run by the chat panel (apps/web/src/ai.ts),
 // which sends back { content, summary, stepId }. The model sees only `content`.
 
-export const MODEL = "claude-opus-5-5"
+export const MODEL = "claude-haiku-5-5"
 
 export interface Context {
   user: User
